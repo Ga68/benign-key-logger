@@ -114,9 +114,17 @@ def setup_sqlite_database():
   log_db.execute('DROP VIEW IF EXISTS key_counts')
   log_db.execute("""
     CREATE VIEW IF NOT EXISTS key_counts AS
-    SELECT key_code, count(*) as count,
-    (count(*) * 1.0) / (SELECT count(*) FROM key_log) as frequency
-    FROM key_log GROUP BY 1 ORDER BY 2 DESC, 1
+    WITH frequencies AS (
+        SELECT key_code, count(*) AS count,
+            (count(*) * 1.0) / (SELECT count(*) FROM key_log) AS frequency
+        FROM key_log
+        GROUP BY 1
+    )
+    SELECT *, SUM(frequency) OVER (
+        ORDER BY frequency DESC ROWS UNBOUNDED PRECEDING
+    ) AS cumulative_frequency
+    FROM frequencies
+    ORDER BY frequency DESC, key_code
   """)
   logging.debug('SQLite view(s) created')
 
