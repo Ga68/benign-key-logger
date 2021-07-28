@@ -18,7 +18,7 @@ Keep all data local and simply consolidated. Send nothing, anywhere, off the com
 
 Comment the code extensively to explain not only what's happening, but additionally the thinking behind each choice.
 
-## Implementation 
+## Design Considerations 
 
 ### Comments
 
@@ -45,17 +45,17 @@ I use a [DB Browser for SQLite](https://sqlitebrowser.org/) to look at and query
 
 The Python logging module is used to provide INFO, DEBUG, WARNING, etc. messages. As written, this goes to the screen, not to a file anywhere. So if you run this from the terminal, you'll see a stream of key-presses rolling on by. If you wanted it in a file, I guess you could; however, given the goal of trying to stay benign, I decided the screen made more sense to keep that information "ephemeral". By default it's written to only show INFO (and above) messages—no DEBUG information—but you can change that and enjoy the far more copious entries screaming on down your output window, if that's your thing.
 
-## Operation
-
-### Dependencies
-
-You'll need to install `pynput`. You can see more details on that library from [PyPi](https://pypi.org/project/pynput/) or [GitHub](https://github.com/moses-palmer/pynput), and you can read [its documentation](https://pynput.readthedocs.io/en/latest/) as well. The other items are all Python-standard libraries: `datetime`, `logging`, and `sqlite3`. I purposefully don't install `pynput` locally here because I don't want you to have to trust that the version included hasn't been tampered with. So, you can add it in to your system, or locally to the folder, using `pip3`.
-
-### Running It
-
-I run it from the Terminal with `python3 key_logger.py`. One could add execution permissions to the file (`chmod +x key_logger.py`) and then run it like a script (`./key_logger.py`), since it does have the Python shebang at the top; however, in the spirit of being *benign*, I don't like the idea of making the file executable, even though I know it's not an EXE, but ¯\\\_(ツ)\_/¯.
+## Usage
 
 ### Security Permissions
 
 <img src="https://gleadee-public-us-east-1.s3.amazonaws.com/github/benign-key-logger/security_and_privacy.png" width="350" align="right" />
 I only know how (and even if you need) to grant keyboard access on a Mac. You must give the script Accessibility permissions in `System Preferences > Security & Privacy > Privacy > Accesibility`. (Don't forget you likely need to unlock this preferences screen to make any changes.) This gives the app you run it from permission to see the keyboard events. I usually use Terminal, but you can also run it from your code editor, like Sublime Text. Without this step, the script will just sit there silently, deaf to all keyboard events. The macOS automatically supresses logging when it switches into secure input mode (passwords). So, through not effort of my own, it very nicely avoids logging any information typed into OS-labeled password screens. At least for me, this is even true for password fields in my browser. Nice!
+
+### Dependencies
+
+You'll need to install `pynput`. You can see more details on that library from [PyPi](https://pypi.org/project/pynput/) or [GitHub](https://github.com/moses-palmer/pynput), and you can read [its documentation](https://pynput.readthedocs.io/en/latest/) as well. The other items are all Python-standard libraries: `datetime`, `logging`, and `sqlite3`. I purposefully don't install `pynput` locally here because I don't want you to have to trust that the version included hasn't been tampered with. So, you can add it in to your system, or locally to the folder, using `pip`: `pip3 install pynput`.
+
+### Running It
+
+I run it from the Terminal with `python3 key_logger.py`. One could add execution permissions to the file (`chmod +x key_logger.py`) and then run it like a script (`./key_logger.py`), since it does have the Python shebang at the top; however, in the spirit of being *benign*, I don't like the idea of making the file executable, even though I know it's not an EXE, but ¯\\\_(ツ)\_/¯.
