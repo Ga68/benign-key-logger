@@ -120,6 +120,7 @@ def setup_sqlite_database():
   """)
   logging.debug('SQLite view(s) created')
 
+  log_db_connection.commit()
   logging.info(f'SQLite database set up: {SQLITE_FILE_NAME}')
 
 
@@ -239,17 +240,17 @@ def key_down(key):
   only a modifier (the <cmd> in <cmd>-A), then we need to keep track
   that it's down, and wait until something else is pressed.
 
-  First we only log the press if it's not already in the list to avoid
+  First we only log the press if it's not already in the list, to avoid
   logging "sticky keys": pressing and holding a key and then seeing it
-  typed many times. By exiting the  function (stopping all processing)
+  typed many times. By exiting the function (stopping all processing)
   if it's in the keys_currently_down list (already being pressed), we
   ignore the repeats. This seems resonable since in some places,
   holding the key will type the letter many times, and in others it
   will pop up a menu for selecting letters with diacritics. So it
   seems poorly defined as to what's actually happening on the screen
   anyways, during a hold-down. And the whole point of this program is
-  to help you figure out what your fingers are doing, not what's
-  necessarily going on in the computer.
+  to help you figure out what your fingers are doing, not necessarily
+  what is going on in the computer.
   """
   if key in keys_currently_down:
     return
