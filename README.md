@@ -59,3 +59,7 @@ You'll need to install `pynput`. You can see more details on that library from [
 ### Running It
 
 I run it from the Terminal with `python3 key_logger.py`. One could add execution permissions to the file (`chmod +x key_logger.py`) and then run it like a script (`./key_logger.py`), since it does have the Python shebang at the top; however, in the spirit of being *benign*, I don't like the idea of making the file executable, even though I know it's not an EXE, but ¯\\\_(ツ)\_/¯.
+
+## Screenshots
+
+<img src="https://gleadee-public-us-east-1.s3.amazonaws.com/github/benign-key-logger/screenshot_terminal.jpg" height="500" />&nbsp;<img src="https://gleadee-public-us-east-1.s3.amazonaws.com/github/benign-key-logger/screenshot_sqlite_key_log.jpg" height="500" /><br /><img src="https://gleadee-public-us-east-1.s3.amazonaws.com/github/benign-key-logger/screenshot_sqlite_key_counts.jpg" width="413" />
