@@ -66,6 +66,17 @@ MODIFIER_KEYS = [
 
 IGNORED_KEYS = []
 
+REMAP = {
+    Key.alt_r: Key.alt,
+    Key.alt_l: Key.alt,
+    Key.ctrl_r: Key.ctrl,
+    Key.ctrl_l: Key.ctrl,
+    Key.cmd_r: Key.cmd,
+    Key.cmd_l: Key.cmd,
+    Key.shift_r: Key.shift,
+    Key.shift_l: Key.shift,
+}
+
 keys_currently_down = []
 
 # ######### ######### ##########
@@ -130,40 +141,6 @@ def setup_sqlite_database():
 
   log_db_connection.commit()
   logging.info(f'SQLite database set up: {SQLITE_FILE_NAME}')
-
-
-def remap_key(key):
-  """
-  This helps simplfy the logging by remapping certain keys to others.
-  For example, I don't care to log whether the left or right Control
-  key was used in a combo, just that Control was used. So the CTRL_R
-  is remapped simply to CTRL.
-  """
-  k = key
-
-  if key == Key.alt_r:
-    k = Key.alt
-  elif key == Key.alt_l:
-    k = Key.alt
-
-  elif key == Key.ctrl_r:
-    k = Key.ctrl
-  elif key == Key.ctrl_l:
-    k = Key.ctrl
-
-  elif key == Key.cmd_r:
-    k = Key.cmd
-  elif key == Key.cmd_l:
-    k = Key.cmd
-
-  elif key == Key.shift_r:
-    k = Key.shift
-  elif key == Key.shift_l:
-    k = Key.shift
-
-  if k != key:
-    logging.debug(f'remapped key {key_to_str(key)} -> {key_to_str(k)}')
-  return k
 
 
 def key_to_str(key):
@@ -271,7 +248,7 @@ def key_down(key):
   if key not in MODIFIER_KEYS:
     log(key)
 
- 
+
 def key_up(key):
   """
   The real action goes on when a key is pressed down, not up; however,
@@ -340,17 +317,29 @@ def key_up(key):
   )
 
 
-# A simple wrapper to to do some preprocessing on the key press
-# prior to sending it off for normal handling
 def preprocess(key, f):
-  k = remap_key(key)
+  """
+  A simple wrapper to to do some preprocessing on the key press prior to
+  sending it off for normal key-up/down handling.
+
+  The remapping step helps simplfy the logging. For example, I don't
+  care to log whether the left or right Control key was used in a combo,
+  just that Control was used. So the CTRL_R is remapped simply to CTRL.
+
+  Ignoring comes after remapping so that the ignore list can take
+  advantage of the remapping, for brevity. For example, you can
+  ignore left and right shift, by remapping shift_r and shift_l to
+  shift, and then ignoring shift.
+  """
+  k = key
+  if key in REMAP:
+    k = REMAP[key]
+    logging.debug(f'remapped key {key_to_str(key)} -> {key_to_str(k)}')
+
   if k in IGNORED_KEYS:
-    # ignoring after remapping so that the ignore list can take
-    # advantage of the remapping, for brevity. For example, you can
-    # ignore left and right shift, by remapping shift_r to shift, and
-    # then ignoring shift.
     logger.debug(f'ignoring key: {key_to_str(k)}')
     return
+
   return f(k)
 
 
