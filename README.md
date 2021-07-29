@@ -62,4 +62,4 @@ I run it from the Terminal with `python3 key_logger.py`. One could add execution
 
 ## Screenshots
 
-<img src="https://gleadee-public-us-east-1.s3.amazonaws.com/github/benign-key-logger/screenshot_terminal.jpg" height="500" />&nbsp;<img src="https://gleadee-public-us-east-1.s3.amazonaws.com/github/benign-key-logger/screenshot_sqlite_key_log.jpg" height="500" /><br /><img src="https://gleadee-public-us-east-1.s3.amazonaws.com/github/benign-key-logger/screenshot_sqlite_key_counts.jpg" width="413" />
+<img src="https://gleadee-public-us-east-1.s3.amazonaws.com/github/benign-key-logger/screenshot_terminal.jpg" width="500" />&nbsp;<img src="https://gleadee-public-us-east-1.s3.amazonaws.com/github/benign-key-logger/screenshot_sqlite_key_log.jpg" width="500" />&nbsp;<img src="https://gleadee-public-us-east-1.s3.amazonaws.com/github/benign-key-logger/screenshot_sqlite_key_counts.jpg" width="500" />
