@@ -39,7 +39,9 @@ There are two ways to store the output (the key-log). In both cases, it's simply
 
 I chose [SQLite](https://sqlite.org/index.html) because it entirely resides in a single file that you can delete anytime you want, and it doesn't require any separate database engine. If you're not familiar with it, it's effectively just like putting your data in a text file, one entry per line, but it does it in a structured way that, when you use a program that knows how to read that structure, gives you much of the power of SQL. The nice thing is that 100% of the data, meta-data, etc. is all in that one file. And having the entries in a database, does provide some advantages (if you know SQL) when you want to quickly answer questions like "Show me the keys I press in descending order, by frequency?" or "What percentage of key presses is the spacebar?" You can even do some fun stuff like "How fast do I type?" (since timestamps are maintained in the SQLite log), "Do I type more during odd or even hours of the day?", and other, life-changing questions-and-answers.
 
-I use a [DB Browser for SQLite](https://sqlitebrowser.org/) to look at and query the SQLite datafile.
+Among other options, two applications I've used to look at and query the SQLite datafile are listed here.
+- [DB Browser for SQLite](https://sqlitebrowser.org/)
+- [SQLiteStudio](https://sqlitestudio.pl/)
 
 ### Logging
 

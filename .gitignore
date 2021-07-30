@@ -1,7 +1,7 @@
 # Specify filepatterns you want git to ignore.
 
 # Assuming that any TXT/CSV/SQLite files in the home directory are actual
-# log files
+# log files and have no business being accidentally version controlled
 /*.txt
 /*.csv
 /*.sqlite*
