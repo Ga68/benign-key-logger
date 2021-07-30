@@ -5,3 +5,6 @@
 /*.txt
 /*.csv
 /*.sqlite*
+
+# Python cache files
+*.pyc

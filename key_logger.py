@@ -14,14 +14,8 @@
 # On each key-up event, clear the key from the list of what's being
 #   held down
 
-# ######### ######### ##########
-# ######### Libraries ##########
-# ######### ######### ##########
-
-from datetime import datetime
 import logging
 from pynput.keyboard import Key, Listener
-import sqlite3
 
 
 # ######### #### ######## ##########
@@ -44,6 +38,10 @@ logging.basicConfig(
     format='%(asctime)s : %(levelname)-5s : %(message)s',
     datefmt='%Y-%m-%d %H%M%S'
 )
+
+if SEND_LOGS_TO_SQLITE:
+  from datetime import datetime
+  import sqlite3
 
 if SEND_LOGS_TO_FILE:
   logging.info(f'File used for logging: {LOG_FILE_NAME}')
@@ -79,15 +77,19 @@ REMAP = {
 
 keys_currently_down = []
 
-# ######### ######### ##########
-# ######### Functions ##########
-# ######### ######### ##########
+# ######### ####### ######### ##########
+# ######### Logging Functions ##########
+# ######### ####### ######### ##########
 
 
 def setup_sqlite_database():
   """
   This creates the Pyhton-objects and the initial table and views in
-  the SQLite database (file).
+  the SQLite database (file). It's long, but that's primarily just
+  because some of the SQL for the views is long. At it's most basic, it
+  is pretty straight forward: (1) connect to the SQLite file, (2) create
+  the table for storing key presses, and (3) create the views for looking at
+  usage statistics
 
   If you already have a SQLite key-log (a file with the name
   SQLITE_FILE_NAME), then the results of the session will be APPENDED to
@@ -99,31 +101,31 @@ def setup_sqlite_database():
   will be created, or (3) change the name of the file in the
   SQLITE_FILE_NAME variable above and a new one will be created.
 
-  There's one VIEW that's created, simply as a convenience, that will
-  list your usage by key. The main table keeps a single row for every
-  key-stroke, which doesn't do much for the ultimate goal of
-  understanding your aggregate key-usage.
+  There's a few views that are created, simply as a convenience, that
+  will list your usage by key, bigram, and trigram. The main table keeps
+  a single row for every key-stroke, which doesn't do much for the
+  ultimate goal of understanding your aggregate key-usage.
   """
-  global log_db_connection
-  global log_db
-  log_db_connection = sqlite3.connect(
+  global db_connection
+  global db_cursor
+  db_connection = sqlite3.connect(
       SQLITE_FILE_NAME,
       check_same_thread=False,
       # The same thread check is off since the keyboard listener works
       # in a spawned thread (a decision of the pynput library) separate
       # from this python script.
   )
-  log_db = log_db_connection.cursor()
+  db_cursor = db_connection.cursor()
   logging.debug('SQLite connection and cursor created')
 
-  log_db.execute("""
+  db_cursor.execute("""
       CREATE TABLE IF NOT EXISTS key_log
       (time_utc TEXT, key_code TEXT)
   """)
   logging.debug('SQLite logging table created')
 
-  log_db.execute('DROP VIEW IF EXISTS key_counts')
-  log_db.execute("""
+  db_cursor.execute('DROP VIEW IF EXISTS key_counts')
+  db_cursor.execute("""
     CREATE VIEW IF NOT EXISTS key_counts AS
     WITH frequencies AS (
         SELECT key_code, count(*) AS count,
@@ -137,10 +139,143 @@ def setup_sqlite_database():
     FROM frequencies
     ORDER BY frequency DESC, key_code
   """)
-  logging.debug('SQLite view(s) created')
+  logging.debug('SQLite key_counts view created')
 
-  log_db_connection.commit()
+  db_cursor.execute('DROP VIEW IF EXISTS bigram_counts')
+  db_cursor.execute("""
+    CREATE VIEW IF NOT EXISTS bigram_counts AS
+    WITH raw_bigram_data AS
+    (
+      SELECT key_code, lag(key_code) OVER (ORDER BY time_utc) AS key_code_lag_1
+      FROM key_log
+    )
+    , bigram_counts AS
+    (
+      SELECT key_code_lag_1 || ' ' || key_code AS bigram, count(*) AS count
+      FROM raw_bigram_data
+      WHERE true
+        AND key_code IS NOT NULL
+        AND key_code_lag_1 IS NOT NULL
+        AND key_code NOT LIKE '%+%'
+        AND key_code_lag_1 NOT LIKE '%+%'
+      GROUP BY 1
+    )
+    , bigram_frequencies AS
+    (
+      SELECT *,
+        (1.0* count ) / (SELECT sum(count) FROM bigram_counts) AS frequency
+      FROM bigram_counts
+    )
+    SELECT *, SUM(frequency) OVER (
+        ORDER BY frequency DESC ROWS UNBOUNDED PRECEDING
+    ) AS cumulative_frequency
+    FROM bigram_frequencies
+    GROUP BY bigram
+    ORDER BY cumulative_frequency, count DESC, bigram
+  """)
+  logging.debug('SQLite bigram_counts view created')
+
+  db_cursor.execute('DROP VIEW IF EXISTS trigram_counts')
+  db_cursor.execute("""
+    CREATE VIEW IF NOT EXISTS trigram_counts AS
+    WITH raw_trigram_data AS
+    (
+      SELECT
+        key_code,
+        lag(key_code) OVER (ORDER BY time_utc) AS key_code_lag_1,
+        lag(key_code, 2) OVER (ORDER BY time_utc) AS key_code_lag_2
+      FROM key_log
+    )
+    , trigram_counts AS
+    (
+      SELECT
+        key_code_lag_2 || ' ' || key_code_lag_1 || ' ' || key_code AS trigram,
+        count(*) AS count
+      FROM raw_trigram_data
+      WHERE true
+        AND key_code IS NOT NULL
+        AND key_code_lag_1 IS NOT NULL
+        AND key_code_lag_2 IS NOT NULL
+        AND key_code NOT LIKE '%+%'
+        AND key_code_lag_1 NOT LIKE '%+%'
+        AND key_code_lag_2 NOT LIKE '%+%'
+      GROUP BY 1
+    )
+    , trigram_frequencies AS
+    (
+      SELECT *,
+        (1.0* count ) / (SELECT sum(count) FROM trigram_counts) AS frequency
+      FROM trigram_counts
+    )
+    SELECT *, SUM(frequency) OVER (
+        ORDER BY frequency DESC ROWS UNBOUNDED PRECEDING
+    ) AS cumulative_frequency
+    FROM trigram_frequencies
+    GROUP BY trigram
+    ORDER BY cumulative_frequency, count DESC, trigram
+  """)
+  logging.debug('SQLite trigram_counts view created')
+
+  db_connection.commit()
   logging.info(f'SQLite database set up: {SQLITE_FILE_NAME}')
+
+
+def log(key):
+  """
+  We're looking to see what modifiers are pressed, in addition to the
+  key that triggered the log request, and then want to log that.
+
+  If <shift> alone is the modifier pressed down we don't really need to
+  track it when used with a symbol. For example, if you press 'a',
+  you'll see that 'a' is logged, and when you press 'shift+a', 'A'
+  is logged (similarly '1' and '!'). It's not important that shift
+  was used to get there, only the final key, since, when setting up
+  your own keyboard, it's possible that you choose to put a symbol,
+  like '@' on a layer that doesn't require shift.
+
+  If you use shift with a non-symbol (like the right arrow), then
+  you'd want to log it as normal, since this behavior (which is
+  expanding the selection one character to the right usually)
+  wouldn't be distinguishable from simple <right>.
+
+  Additionally, when there are modifiers in addition to shift (like
+  <ctrl> or <cmd>), you'll see that <ctrl> + <shift> + 'a' is logged
+  like that and not like <ctrl> + A. So maintaining the <shift> as
+  part of the combo, is important to distinguish between <crtl> + a
+  and <ctrl> + <shift> + a (and logging <ctrl> + A seems,
+  conceptually, to miss the mark on logging combos).
+  """
+  modifiers_down = [k for k in keys_currently_down if k in MODIFIER_KEYS]
+  if modifiers_down == [Key.shift] and key_is_a_symbol(key):
+    modifiers_down = []
+  log_entry = ' + '.join(
+      sorted([key_to_str(k) for k in modifiers_down])
+      + [key_to_str(key)]
+  )
+  logging.info(f'key: {log_entry}')
+
+  if SEND_LOGS_TO_SQLITE:
+    row_values = (datetime.utcnow().isoformat(), log_entry)
+    db_cursor.execute(
+        'INSERT INTO key_log VALUES (?, ?)',
+        row_values
+    )
+    db_connection.commit()
+    logging.debug(f'logged to SQLite: {row_values}')
+
+  if SEND_LOGS_TO_FILE:
+    with open(LOG_FILE_NAME, 'a') as log_file:  # append mode
+      log_file.write(f'{log_entry}\n')
+      logging.debug(f'logged to file: {log_entry}')
+
+
+# ######### ### ######### ##########
+# ######### Key Functions ##########
+# ######### ### ######### ##########
+
+
+def key_is_a_symbol(key):
+  return str(key)[0:4] != 'Key.'
 
 
 def key_to_str(key):
@@ -157,63 +292,12 @@ def key_to_str(key):
   undoes those two items.
   """
   s = str(key)
-  if s[0:4] == 'Key.':
-    # trim the 'Key.' off and add brackets if it's not a letter/symbol
+  if not key_is_a_symbol(key):
     s = f'<{s[4:]}>'
   else:
-    # take care of unescaping backslashes, i.e. "'\\'" -> "'\'"
     s = s.encode('latin-1', 'backslashreplace').decode('unicode-escape')
-    s = s[1:-1]  # trim the leading and trailing quotes
+    s = s[1:-1]  # trim the leading and trailing quote
   return s
-
-
-def key_is_a_symbol(key):
-  return str(key)[0:4] != 'Key.'
-
-
-def log(key):
-  modifiers_down = [k for k in keys_currently_down if k in MODIFIER_KEYS]
-  if modifiers_down == [Key.shift] and key_is_a_symbol(key):
-    modifiers_down = []
-    # Because shift is already a "layer" key, we don't really need to
-    # track it when used with a symbol. For example, if you press 'a',
-    # you'll see that 'a' is logged, and when you press 'shift+a', 'A'
-    # is logged (similarly '1' and '!'). It's not important that shift
-    # was used to get there, only the final key, since, when setting up
-    # your own keyboard, it's possible that you choose to put a symbol,
-    # like '@' on a layer that doesn't require shift.
-    #
-    # If you use shift with a non-symbol (like the right arrow), then
-    # you'd want to log it as normal, since this behavior (which is
-    # expanding the selection one character to the right usually)
-    # wouldn't be distinguishable from simple <right>.
-    #
-    # Additionally, when there are modifiers in addition to shift (like
-    # <ctrl> or <cmd>), you'll see that <ctrl> + <shift> + 'a' is logged
-    # like that and not like <ctrl> + A. So maintaining the <shift> as
-    # part of the combo, is important to distinguish between <crtl> + a
-    # and <ctrl> + <shift> + a (and logging <ctrl> + A seems,
-    # conceptually, to miss the mark on logging combos).
-
-  log_entry = ' + '.join(
-      sorted([key_to_str(k) for k in modifiers_down])
-      + [key_to_str(key)]
-  )
-  logging.info(f'key: {log_entry}')
-
-  if SEND_LOGS_TO_SQLITE:
-    row_values = (datetime.utcnow().isoformat(), log_entry)
-    log_db.execute(
-        'INSERT INTO key_log VALUES (?, ?)',
-        row_values
-    )
-    log_db_connection.commit()
-    logging.debug(f'logged to SQLite: {row_values}')
-
-  if SEND_LOGS_TO_FILE:
-    with open(LOG_FILE_NAME, 'a') as log_file:  # append mode
-      log_file.write(f'{log_entry}\n')
-      logging.debug(f'logged to file: {log_entry}')
 
 
 def key_down(key):
