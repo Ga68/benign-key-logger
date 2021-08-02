@@ -84,7 +84,7 @@ keys_currently_down = []
 
 def setup_sqlite_database():
   """
-  This creates the Pyhton-objects and the initial table and views in
+  This creates the Python objects and the initial table and views in
   the SQLite database (file). It's long, but that's primarily just
   because some of the SQL for the views is long. At it's most basic, it
   is pretty straight forward: (1) connect to the SQLite file, (2) create
@@ -104,7 +104,7 @@ def setup_sqlite_database():
   There's a few views that are created, simply as a convenience, that
   will list your usage by key, bigram, and trigram. The main table keeps
   a single row for every key-stroke, which doesn't do much for the
-  ultimate goal of understanding your aggregate key-usage.
+  ultimate goal of understanding your aggregate key usage.
   """
   global db_connection
   global db_cursor
@@ -241,7 +241,7 @@ def log(key):
   Additionally, when there are modifiers in addition to shift (like
   <ctrl> or <cmd>), you'll see that <ctrl> + <shift> + 'a' is logged
   like that and not like <ctrl> + A. So maintaining the <shift> as
-  part of the combo, is important to distinguish between <crtl> + a
+  part of the combo, is important to distinguish between <ctrl> + a
   and <ctrl> + <shift> + a (and logging <ctrl> + A seems,
   conceptually, to miss the mark on logging combos).
   """
@@ -286,9 +286,9 @@ def key_to_str(key):
   and other keys (for example: shift, control, command) are enclosed in
   brackets: '<' and '>'.
 
-  There's slightly more involved processing for the symbols, only
+  There's a slightly more involved process for the symbols, only
   because the string representation includes the surrounding quotes of
-  character (for example: "'a'") and it escapes backslahes, so that part
+  character (for example: "'a'") and it escapes backslashes, so that part
   undoes those two items.
   """
   s = str(key)
@@ -296,7 +296,7 @@ def key_to_str(key):
     s = f'<{s[4:]}>'
   else:
     s = s.encode('latin-1', 'backslashreplace').decode('unicode-escape')
-    s = s[1:-1]  # trim the leading and trailing quote
+    s = s[1:-1]  # trim the leading and trailing quotes
   return s
 
 
@@ -313,7 +313,7 @@ def key_down(key):
   logging "sticky keys": pressing and holding a key and then seeing it
   typed many times. By exiting the function (stopping all processing)
   if it's in the keys_currently_down list (already being pressed), we
-  ignore the repeats. This seems resonable since in some places,
+  ignore the repeats. This seems reasonable since in some places,
   holding the key will type the letter many times, and in others it
   will pop up a menu for selecting letters with diacritics. So it
   seems poorly defined as to what's actually happening on the screen
@@ -338,7 +338,7 @@ def key_up(key):
   The real action goes on when a key is pressed down, not up; however,
   this function needs to accomplish two key things: (1) registering that
   a key is no longer being pressed, which is especially important for
-  the modifier keys, and (2) taking care of some rountine clean up for
+  the modifier keys, and (2) taking care of some routine clean up for
   keys that never get registered as having been released (up events,
   without a corresponding down event).
 
@@ -349,7 +349,7 @@ def key_up(key):
   symbol. For example, press down <shift>, then 'a', and what
   registers is a down-press of 'A' (which gets logged). If you then
   release the a-key, you're left with only <shift> being held down,
-  which is a effectively "nothing" state. But instead, if you pick up
+  which is an effectively "nothing" state. But instead, if you pick up
   <shift> first (while your finger is still holding down the a-key), the
   system registers <shift> up, and then 'a' (little a) down, but never
   'A' (big-A) up. And lastly when you pick up your finger from 'a', then
@@ -369,11 +369,11 @@ def key_up(key):
   when the 'w' is pressed in <cmd>-w (close a window).
 
   However, in the interest of good house-keeping, I like the idea of
-  periodically clearing out thes locked in symbols from the
+  periodically clearing out these locked-in symbols from the
   keys_currently_down list. We accomplish this by waiting until two
   criteria have been met: (1) the length of the keys_currently_down list
   exceeds a threshold (LOCKED_IN_GARBAGE_COLLECTION_LIMIT; so it doesn't
-  happen too often or prematurely), and (2) there are modifier keys
+  happen too often or prematurely), and (2) there are no modifier keys
   being pressed (so we don't clean things up when you're in the middle
   of a key-combo).
   """
@@ -406,7 +406,7 @@ def preprocess(key, f):
   A simple wrapper to to do some preprocessing on the key press prior to
   sending it off for normal key-up/down handling.
 
-  The remapping step helps simplfy the logging. For example, I don't
+  The remapping step helps simplify the logging. For example, I don't
   care to log whether the left or right Control key was used in a combo,
   just that Control was used. So the CTRL_R is remapped simply to CTRL.
 
