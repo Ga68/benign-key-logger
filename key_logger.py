@@ -57,9 +57,17 @@ LOCKED_IN_GARBAGE_COLLECTION_LIMIT = 5
 
 MODIFIER_KEYS = [
     Key.alt,
-    Key.ctrl,
+    Key.alt_r,
+    Key.alt_l,
     Key.cmd,
+    Key.cmd_r,
+    Key.cmd_l,
+    Key.ctrl,
+    Key.ctrl_r,
+    Key.ctrl_l,
     Key.shift,
+    Key.shift_r,
+    Key.shift_l,
 ]
 
 IGNORED_KEYS = []
@@ -231,7 +239,13 @@ def log(key):
   is logged (similarly '1' and '!'). It's not important that shift
   was used to get there, only the final key, since, when setting up
   your own keyboard, it's possible that you choose to put a symbol,
-  like '@' on a layer that doesn't require shift.
+  like '@' on a layer that doesn't require shift. The "alone" part here
+  may look a bit more complicated than needed; however, it's to account
+  for the case that you don't remap <shift_r> to <shift> and you then
+  either do <shift_r> + a = A, or even <shift_r> + <shift_l> + a = A.
+  The code there maps <shift>, <shift_r>, and <shift_l> to <shift>, and
+  then removes duplicates (multi-shift key-downs) using the set(...)
+  constructor.
 
   If you use shift with a non-symbol (like the right arrow), then
   you'd want to log it as normal, since this behavior (which is
@@ -246,7 +260,10 @@ def log(key):
   conceptually, to miss the mark on logging combos).
   """
   modifiers_down = [k for k in keys_currently_down if k in MODIFIER_KEYS]
-  if modifiers_down == [Key.shift] and key_is_a_symbol(key):
+  if list(set([
+      Key.shift for k in modifiers_down
+      if k in [Key.shift, Key.shift_l, Key.shift_r]
+  ])) == [Key.shift] and key_is_a_symbol(key):
     modifiers_down = []
   log_entry = ' + '.join(
       sorted([key_to_str(k) for k in modifiers_down])
