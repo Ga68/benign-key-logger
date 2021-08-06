@@ -96,8 +96,8 @@ def setup_sqlite_database():
   the SQLite database (file). It's long, but that's primarily just
   because some of the SQL for the views is long. At it's most basic, it
   is pretty straight forward: (1) connect to the SQLite file, (2) create
-  the table for storing key presses, and (3) create the views for looking at
-  usage statistics
+  the table for storing key presses, and (3) create the views for
+  looking at usage statistics
 
   If you already have a SQLite key-log (a file with the name
   SQLITE_FILE_NAME), then the results of the session will be APPENDED to
@@ -110,8 +110,8 @@ def setup_sqlite_database():
   SQLITE_FILE_NAME variable above and a new one will be created.
 
   There's a few views that are created, simply as a convenience, that
-  will list your usage by key, bigram, and trigram. The main table keeps
-  a single row for every key-stroke, which doesn't do much for the
+  will list your usage by key, bi-gram, and tri-gram. The main table
+  keeps a single row for every key-stroke, which doesn't do much for the
   ultimate goal of understanding your aggregate key usage.
   """
   global db_connection
@@ -261,8 +261,8 @@ def log(key):
   """
   modifiers_down = [k for k in keys_currently_down if k in MODIFIER_KEYS]
   if list(set([
-      Key.shift for k in modifiers_down
-      if k in [Key.shift, Key.shift_l, Key.shift_r]
+      Key.shift if k in [Key.shift, Key.shift_l, Key.shift_r] else k
+      for k in modifiers_down
   ])) == [Key.shift] and key_is_a_symbol(key):
     modifiers_down = []
   log_entry = ' + '.join(
@@ -298,7 +298,7 @@ def key_is_a_symbol(key):
 def key_to_str(key):
   """
   The string representation pynput's Key.* objects isn't my preferred
-  output, so this function standardizes how they're stringified. The
+  output, so this function standardizes how they're "stringified". The
   gist is that symbols (for example: a, b, Z, !, 3) are presented as-is,
   and other keys (for example: shift, control, command) are enclosed in
   brackets: '<' and '>'.
