@@ -438,7 +438,7 @@ def preprocess(key, f):
     logging.debug(f'remapped key {key_to_str(key)} -> {key_to_str(k)}')
 
   if k in IGNORED_KEYS:
-    logger.debug(f'ignoring key: {key_to_str(k)}')
+    logging.debug(f'ignoring key: {key_to_str(k)}')
     return
 
   return f(k)
