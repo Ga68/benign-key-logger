@@ -35,8 +35,8 @@ SQLITE_FILE_NAME = 'key_log.sqlite'
 logging.basicConfig(
     # level=logging.DEBUG,
     level=logging.INFO,
-    format='%(asctime)s : %(levelname)-5s : %(message)s',
-    datefmt='%Y-%m-%d %H%M%S'
+    format='%(asctime)s.%(msecs)03d : %(levelname)-5s : %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
 
 if SEND_LOGS_TO_SQLITE:
