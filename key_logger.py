@@ -22,8 +22,8 @@ from pynput.keyboard import Key, Listener
 # ######### User Settings ##########
 # ######### #### ######## ##########
 
-SEND_ALL_EVENTS_TO_SQLITE = True
 SEND_LOGS_TO_SQLITE = True
+SEND_ALL_EVENTS_TO_SQLITE = False
 SEND_LOGS_TO_FILE = False
 
 LOG_FILE_NAME = 'key_log.txt'
