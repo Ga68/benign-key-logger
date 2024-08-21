@@ -22,6 +22,7 @@ from pynput.keyboard import Key, Listener
 # ######### User Settings ##########
 # ######### #### ######## ##########
 
+SEND_ALL_EVENTS_TO_SQLITE = True
 SEND_LOGS_TO_SQLITE = True
 SEND_LOGS_TO_FILE = False
 
@@ -131,6 +132,13 @@ def setup_sqlite_database():
       (time_utc TEXT, key_code TEXT)
   """)
   logging.debug('SQLite logging table created')
+
+  if SEND_ALL_EVENTS_TO_SQLITE:
+      db_cursor.execute("""
+          CREATE TABLE IF NOT EXISTS full_key_log
+          (time_utc TEXT, key_code TEXT, event_type TEXT)
+      """)
+      logging.debug('SQLite logging table created')
 
   db_cursor.execute('DROP VIEW IF EXISTS key_counts')
   db_cursor.execute("""
@@ -278,12 +286,22 @@ def log(key):
         row_values
     )
     db_connection.commit()
-    logging.debug(f'logged to SQLite: {row_values}')
+    logging.debug(f'logged to SQLite:key_log {row_values}')
 
   if SEND_LOGS_TO_FILE:
     with open(LOG_FILE_NAME, 'a') as log_file:  # append mode
       log_file.write(f'{log_entry}\n')
       logging.debug(f'logged to file: {log_entry}')
+
+def full_log(key, event):
+  if SEND_ALL_EVENTS_TO_SQLITE:
+    row_values = (datetime.utcnow().isoformat(), key_to_str(key), event);
+    db_cursor.execute(
+        'INSERT INTO full_key_log VALUES (?, ?, ?)',
+        row_values
+    )
+    db_connection.commit()
+    logging.debug(f'logged to SQLite:full_key_log {row_values}')
 
 
 # ######### ### ######### ##########
@@ -338,6 +356,9 @@ def key_down(key):
   to help you figure out what your fingers are doing, not necessarily
   what is going on in the computer.
   """
+  if SEND_ALL_EVENTS_TO_SQLITE:
+      full_log(key, 'DOWN');
+
   if key in keys_currently_down:
     return
 
@@ -395,6 +416,9 @@ def key_up(key):
   of a key-combo).
   """
   global keys_currently_down
+
+  if SEND_ALL_EVENTS_TO_SQLITE:
+      full_log(key, 'UP');
 
   try:
     keys_currently_down.remove(key)
