@@ -267,7 +267,10 @@ def log(key):
   and <ctrl> + <shift> + a (and logging <ctrl> + A seems,
   conceptually, to miss the mark on logging combos).
   """
-  modifiers_down = [k for k in keys_currently_down if k in MODIFIER_KEYS]
+  modifiers_down = [
+      canonicalize_key(k) for k in keys_currently_down if k in MODIFIER_KEYS
+  ]
+  modifiers_down = list(dict.fromkeys(modifiers_down))
   if list(set([
       Key.shift if k in [Key.shift, Key.shift_l, Key.shift_r] else k
       for k in modifiers_down
@@ -275,7 +278,7 @@ def log(key):
     modifiers_down = []
   log_entry = ' + '.join(
       sorted([key_to_str(k) for k in modifiers_down])
-      + [key_to_str(key)]
+      + [key_to_str(canonicalize_key(key))]
   )
   logging.info(f'key: {log_entry}')
 
@@ -295,7 +298,11 @@ def log(key):
 
 def full_log(key, event):
   if SEND_ALL_EVENTS_TO_SQLITE:
-    row_values = (datetime.utcnow().isoformat(), key_to_str(key), event);
+    row_values = (
+        datetime.utcnow().isoformat(),
+        key_to_str(canonicalize_key(key)),
+        event
+    )
     db_cursor.execute(
         'INSERT INTO full_key_log VALUES (?, ?, ?)',
         row_values
@@ -311,6 +318,12 @@ def full_log(key, event):
 
 def key_is_a_symbol(key):
   return str(key)[0:4] != 'Key.'
+
+
+def canonicalize_key(key):
+  if key in REMAP:
+    return REMAP[key]
+  return key
 
 
 def key_to_str(key):
@@ -456,16 +469,15 @@ def preprocess(key, f):
   ignore left and right shift, by remapping shift_r and shift_l to
   shift, and then ignoring shift.
   """
-  k = key
-  if key in REMAP:
-    k = REMAP[key]
+  k = canonicalize_key(key)
+  if k != key:
     logging.debug(f'remapped key {key_to_str(key)} -> {key_to_str(k)}')
 
   if k in IGNORED_KEYS:
     logging.debug(f'ignoring key: {key_to_str(k)}')
     return
 
-  return f(k)
+  return f(key)
 
 
 # ######### ######### ##########
