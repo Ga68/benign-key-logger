@@ -41,6 +41,8 @@ Because the output contains sensitive data, the logger now creates its log files
 
 I chose [SQLite](https://sqlite.org/index.html) because the output is a single file that you can delete anytime you want, and it doesn't require any separate database engine. If you're not familiar with it, it's much like putting your data in a text file, one entry per line, but it does so in a structured way that, when you use a program that knows how to read that structure, gives you the power of SQL. The nice thing is that 100% of the data, meta data, etc. is in that one file. And having the entries in a database, does provide some advantages (if you know SQL) when you want to answer questions like "Show me the keys I press in descending order, by frequency?" or "What percentage of key strokes is the space bar?" You can even do some fun stuff like "How fast do I type?" (since timestamps are maintained in the SQLite log), "Do I type more during odd or even hours of the day?", and other, life changing questions-and-answers. A basic version of this is built into the SQLite output file, in the form of predefined views.
 
+To avoid paying the full SQLite commit cost on every single keystroke, the logger batches writes and commits them every 50 events or every 5 seconds, whichever comes first, and then performs a final flush on clean shutdown. The event threshold is chosen to be roughly consistent with a fast typist around 100 WPM.
+
 Among other options, two applications I use to look at and query the SQLite data file are
 - [SQLiteStudio](https://sqlitestudio.pl/)
 - [DB Browser for SQLite](https://sqlitebrowser.org/)

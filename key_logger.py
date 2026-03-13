@@ -14,10 +14,12 @@
 # On each key-up event, clear the key from the list of what's being
 #   held down
 
+import atexit
 import argparse
 import logging
 import os
 import stat
+import time
 from pynput.keyboard import Key, Listener
 
 
@@ -33,6 +35,8 @@ ECHO_KEYS_TO_STDOUT = False
 LOG_FILE_NAME = 'key_log.txt'
 SQLITE_FILE_NAME = 'key_log.sqlite'
 OWNER_ONLY_FILE_MODE = 0o600
+SQLITE_COMMIT_EVERY_N_EVENTS = 50
+SQLITE_COMMIT_EVERY_SECONDS = 5.0
 
 # ######### ####### ##### ##########
 # ######### Logging Setup ##########
@@ -90,6 +94,8 @@ REMAP = {
 }
 
 keys_currently_down = []
+pending_sqlite_writes = 0
+last_sqlite_commit_time = None
 
 def get_file_mode(path):
   return stat.S_IMODE(os.stat(path).st_mode)
@@ -128,6 +134,42 @@ def open_owner_only_log_file(path):
   return os.fdopen(fd, 'a')
 
 
+def commit_sqlite_if_needed(force=False):
+  global pending_sqlite_writes
+  global last_sqlite_commit_time
+
+  if not SEND_LOGS_TO_SQLITE or pending_sqlite_writes == 0:
+    return
+
+  elapsed_since_last_commit = time.monotonic() - last_sqlite_commit_time
+  should_commit = force
+  should_commit = should_commit or (
+      pending_sqlite_writes >= SQLITE_COMMIT_EVERY_N_EVENTS
+  )
+  should_commit = should_commit or (
+      elapsed_since_last_commit >= SQLITE_COMMIT_EVERY_SECONDS
+  )
+
+  if not should_commit:
+    return
+
+  db_connection.commit()
+  ensure_sqlite_files_are_owner_only()
+  logging.debug(
+      'committed SQLite writes: '
+      f'{pending_sqlite_writes} pending rows flushed'
+  )
+  pending_sqlite_writes = 0
+  last_sqlite_commit_time = time.monotonic()
+
+
+def note_pending_sqlite_write():
+  global pending_sqlite_writes
+
+  pending_sqlite_writes += 1
+  commit_sqlite_if_needed()
+
+
 # ######### ####### ######### ##########
 # ######### Logging Functions ##########
 # ######### ####### ######### ##########
@@ -159,6 +201,8 @@ def setup_sqlite_database():
   """
   global db_connection
   global db_cursor
+  global pending_sqlite_writes
+  global last_sqlite_commit_time
   if not os.path.exists(SQLITE_FILE_NAME):
     with open_owner_only_log_file(SQLITE_FILE_NAME):
       pass
@@ -171,6 +215,9 @@ def setup_sqlite_database():
   )
   ensure_sqlite_files_are_owner_only()
   db_cursor = db_connection.cursor()
+  pending_sqlite_writes = 0
+  last_sqlite_commit_time = time.monotonic()
+  atexit.register(lambda: commit_sqlite_if_needed(force=True))
   logging.debug('SQLite connection and cursor created')
 
   db_cursor.execute("""
@@ -280,6 +327,7 @@ def setup_sqlite_database():
 
   db_connection.commit()
   ensure_sqlite_files_are_owner_only()
+  last_sqlite_commit_time = time.monotonic()
   logging.info(f'SQLite database set up: {SQLITE_FILE_NAME}')
 
 
@@ -336,8 +384,7 @@ def log(key):
         'INSERT INTO key_log VALUES (?, ?)',
         row_values
     )
-    db_connection.commit()
-    ensure_sqlite_files_are_owner_only()
+    note_pending_sqlite_write()
     logging.debug(f'logged to SQLite:key_log {row_values}')
 
   if SEND_LOGS_TO_FILE:
@@ -356,8 +403,7 @@ def full_log(key, event):
         'INSERT INTO full_key_log VALUES (?, ?, ?)',
         row_values
     )
-    db_connection.commit()
-    ensure_sqlite_files_are_owner_only()
+    note_pending_sqlite_write()
     logging.debug(f'logged to SQLite:full_key_log {row_values}')
 
 
