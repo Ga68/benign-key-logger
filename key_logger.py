@@ -92,6 +92,92 @@ REMAP = {
     Key.shift_l: Key.shift,
 }
 
+KEY_COUNTS_VIEW_SQL = """
+  CREATE VIEW IF NOT EXISTS key_counts AS
+  WITH frequencies AS (
+      SELECT key_code, count(*) AS count,
+          (count(*) * 1.0) / (SELECT count(*) FROM key_log) AS frequency
+      FROM key_log
+      GROUP BY 1
+  )
+  SELECT *, SUM(frequency) OVER (
+      ORDER BY frequency DESC ROWS UNBOUNDED PRECEDING
+  ) AS cumulative_frequency
+  FROM frequencies
+  ORDER BY frequency DESC, key_code
+"""
+
+BIGRAM_COUNTS_VIEW_SQL = """
+  CREATE VIEW IF NOT EXISTS bigram_counts AS
+  WITH raw_bigram_data AS
+  (
+    SELECT key_code, lag(key_code) OVER (ORDER BY time_utc) AS key_code_lag_1
+    FROM key_log
+  )
+  , bigram_counts AS
+  (
+    SELECT key_code_lag_1 || ' ' || key_code AS bigram, count(*) AS count
+    FROM raw_bigram_data
+    WHERE true
+      AND key_code IS NOT NULL
+      AND key_code_lag_1 IS NOT NULL
+      AND key_code NOT LIKE '%+%'
+      AND key_code_lag_1 NOT LIKE '%+%'
+    GROUP BY 1
+  )
+  , bigram_frequencies AS
+  (
+    SELECT *,
+      (1.0* count ) / (SELECT sum(count) FROM bigram_counts) AS frequency
+    FROM bigram_counts
+  )
+  SELECT *, SUM(frequency) OVER (
+      ORDER BY frequency DESC ROWS UNBOUNDED PRECEDING
+  ) AS cumulative_frequency
+  FROM bigram_frequencies
+  GROUP BY bigram
+  ORDER BY cumulative_frequency, count DESC, bigram
+"""
+
+TRIGRAM_COUNTS_VIEW_SQL = """
+  CREATE VIEW IF NOT EXISTS trigram_counts AS
+  WITH raw_trigram_data AS
+  (
+    SELECT
+      key_code,
+      lag(key_code) OVER (ORDER BY time_utc) AS key_code_lag_1,
+      lag(key_code, 2) OVER (ORDER BY time_utc) AS key_code_lag_2
+    FROM key_log
+  )
+  , trigram_counts AS
+  (
+    SELECT
+      key_code_lag_2 || ' ' || key_code_lag_1 || ' ' || key_code AS trigram,
+      count(*) AS count
+    FROM raw_trigram_data
+    WHERE true
+      AND key_code IS NOT NULL
+      AND key_code_lag_1 IS NOT NULL
+      AND key_code_lag_2 IS NOT NULL
+      AND key_code NOT LIKE '%+%'
+      AND key_code_lag_1 NOT LIKE '%+%'
+      AND key_code_lag_2 NOT LIKE '%+%'
+    GROUP BY 1
+  )
+  , trigram_frequencies AS
+  (
+    SELECT *,
+      (1.0* count ) / (SELECT sum(count) FROM trigram_counts) AS frequency
+    FROM trigram_counts
+  )
+  SELECT *, SUM(frequency) OVER (
+      ORDER BY frequency DESC ROWS UNBOUNDED PRECEDING
+  ) AS cumulative_frequency
+  FROM trigram_frequencies
+  GROUP BY trigram
+  ORDER BY cumulative_frequency, count DESC, trigram
+"""
+
 
 @dataclass
 class Config:
@@ -104,6 +190,7 @@ class Config:
   enable_sqlite_wal: bool = DEFAULT_ENABLE_SQLITE_WAL
 
 
+# `Config` holds the user-selected runtime settings derived from CLI flags.
 def build_parser():
   parser = argparse.ArgumentParser(
       formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -235,6 +322,7 @@ def key_to_str(key):
 
 
 class KeyLoggerApp:
+  # `KeyLoggerApp` owns the mutable state and side effects of a single run.
   def __init__(self, config):
     self.config = config
     self.keys_currently_down = []
@@ -317,6 +405,69 @@ class KeyLoggerApp:
     self.db_connection = None
     self.db_cursor = None
 
+  def prepare_sqlite_file(self):
+    if not os.path.exists(self.config.sqlite_file_name):
+      with self.open_owner_only_log_file(self.config.sqlite_file_name):
+        pass
+
+  def open_sqlite_connection(self):
+    self.db_connection = sqlite3.connect(
+        self.config.sqlite_file_name,
+        check_same_thread=False,
+        # The same thread check is off since the keyboard listener works
+        # in a spawned thread (a decision of the pynput library) separate
+        # from this python script.
+    )
+    self.ensure_sqlite_files_are_owner_only()
+    self.db_cursor = self.db_connection.cursor()
+    self.pending_sqlite_writes = 0
+    self.last_sqlite_commit_time = time.monotonic()
+    if not self._close_registered:
+      atexit.register(self.close_sqlite_connection)
+      self._close_registered = True
+    logging.debug('SQLite connection and cursor created')
+
+  def configure_sqlite_journal_mode(self):
+    if not self.config.enable_sqlite_wal:
+      return
+
+    self.db_cursor.execute('PRAGMA journal_mode=WAL')
+    self.ensure_sqlite_files_are_owner_only()
+    logging.info('SQLite WAL mode enabled')
+
+  def create_sqlite_tables(self):
+    self.db_cursor.execute("""
+        CREATE TABLE IF NOT EXISTS key_log
+        (time_utc TEXT, key_code TEXT)
+    """)
+    logging.debug('SQLite key_log table created')
+
+    if self.config.send_all_events_to_sqlite:
+      self.db_cursor.execute("""
+          CREATE TABLE IF NOT EXISTS full_key_log
+          (time_utc TEXT, key_code TEXT, event_type TEXT)
+      """)
+      logging.debug('SQLite full_key_log table created')
+
+  def create_sqlite_views(self):
+    self.db_cursor.execute('DROP VIEW IF EXISTS key_counts')
+    self.db_cursor.execute(KEY_COUNTS_VIEW_SQL)
+    logging.debug('SQLite key_counts view created')
+
+    self.db_cursor.execute('DROP VIEW IF EXISTS bigram_counts')
+    self.db_cursor.execute(BIGRAM_COUNTS_VIEW_SQL)
+    logging.debug('SQLite bigram_counts view created')
+
+    self.db_cursor.execute('DROP VIEW IF EXISTS trigram_counts')
+    self.db_cursor.execute(TRIGRAM_COUNTS_VIEW_SQL)
+    logging.debug('SQLite trigram_counts view created')
+
+  def finish_sqlite_setup(self):
+    self.db_connection.commit()
+    self.ensure_sqlite_files_are_owner_only()
+    self.last_sqlite_commit_time = time.monotonic()
+    logging.info(f'SQLite database set up: {self.config.sqlite_file_name}')
+
   def setup_sqlite_database(self):
     """
     This creates the Python objects and the initial table and views in
@@ -341,140 +492,12 @@ class KeyLoggerApp:
     keeps a single row for every key-stroke, which doesn't do much for the
     ultimate goal of understanding your aggregate key usage.
     """
-    if not os.path.exists(self.config.sqlite_file_name):
-      with self.open_owner_only_log_file(self.config.sqlite_file_name):
-        pass
-
-    self.db_connection = sqlite3.connect(
-        self.config.sqlite_file_name,
-        check_same_thread=False,
-        # The same thread check is off since the keyboard listener works
-        # in a spawned thread (a decision of the pynput library) separate
-        # from this python script.
-    )
-    self.ensure_sqlite_files_are_owner_only()
-    self.db_cursor = self.db_connection.cursor()
-    self.pending_sqlite_writes = 0
-    self.last_sqlite_commit_time = time.monotonic()
-    if not self._close_registered:
-      atexit.register(self.close_sqlite_connection)
-      self._close_registered = True
-    logging.debug('SQLite connection and cursor created')
-
-    if self.config.enable_sqlite_wal:
-      self.db_cursor.execute('PRAGMA journal_mode=WAL')
-      self.ensure_sqlite_files_are_owner_only()
-      logging.info('SQLite WAL mode enabled')
-
-    self.db_cursor.execute("""
-        CREATE TABLE IF NOT EXISTS key_log
-        (time_utc TEXT, key_code TEXT)
-    """)
-    logging.debug('SQLite logging table created')
-
-    if self.config.send_all_events_to_sqlite:
-      self.db_cursor.execute("""
-          CREATE TABLE IF NOT EXISTS full_key_log
-          (time_utc TEXT, key_code TEXT, event_type TEXT)
-      """)
-      logging.debug('SQLite full_key_log table created')
-
-    self.db_cursor.execute('DROP VIEW IF EXISTS key_counts')
-    self.db_cursor.execute("""
-      CREATE VIEW IF NOT EXISTS key_counts AS
-      WITH frequencies AS (
-          SELECT key_code, count(*) AS count,
-              (count(*) * 1.0) / (SELECT count(*) FROM key_log) AS frequency
-          FROM key_log
-          GROUP BY 1
-      )
-      SELECT *, SUM(frequency) OVER (
-          ORDER BY frequency DESC ROWS UNBOUNDED PRECEDING
-      ) AS cumulative_frequency
-      FROM frequencies
-      ORDER BY frequency DESC, key_code
-    """)
-    logging.debug('SQLite key_counts view created')
-
-    self.db_cursor.execute('DROP VIEW IF EXISTS bigram_counts')
-    self.db_cursor.execute("""
-      CREATE VIEW IF NOT EXISTS bigram_counts AS
-      WITH raw_bigram_data AS
-      (
-        SELECT key_code, lag(key_code) OVER (ORDER BY time_utc) AS key_code_lag_1
-        FROM key_log
-      )
-      , bigram_counts AS
-      (
-        SELECT key_code_lag_1 || ' ' || key_code AS bigram, count(*) AS count
-        FROM raw_bigram_data
-        WHERE true
-          AND key_code IS NOT NULL
-          AND key_code_lag_1 IS NOT NULL
-          AND key_code NOT LIKE '%+%'
-          AND key_code_lag_1 NOT LIKE '%+%'
-        GROUP BY 1
-      )
-      , bigram_frequencies AS
-      (
-        SELECT *,
-          (1.0* count ) / (SELECT sum(count) FROM bigram_counts) AS frequency
-        FROM bigram_counts
-      )
-      SELECT *, SUM(frequency) OVER (
-          ORDER BY frequency DESC ROWS UNBOUNDED PRECEDING
-      ) AS cumulative_frequency
-      FROM bigram_frequencies
-      GROUP BY bigram
-      ORDER BY cumulative_frequency, count DESC, bigram
-    """)
-    logging.debug('SQLite bigram_counts view created')
-
-    self.db_cursor.execute('DROP VIEW IF EXISTS trigram_counts')
-    self.db_cursor.execute("""
-      CREATE VIEW IF NOT EXISTS trigram_counts AS
-      WITH raw_trigram_data AS
-      (
-        SELECT
-          key_code,
-          lag(key_code) OVER (ORDER BY time_utc) AS key_code_lag_1,
-          lag(key_code, 2) OVER (ORDER BY time_utc) AS key_code_lag_2
-        FROM key_log
-      )
-      , trigram_counts AS
-      (
-        SELECT
-          key_code_lag_2 || ' ' || key_code_lag_1 || ' ' || key_code AS trigram,
-          count(*) AS count
-        FROM raw_trigram_data
-        WHERE true
-          AND key_code IS NOT NULL
-          AND key_code_lag_1 IS NOT NULL
-          AND key_code_lag_2 IS NOT NULL
-          AND key_code NOT LIKE '%+%'
-          AND key_code_lag_1 NOT LIKE '%+%'
-          AND key_code_lag_2 NOT LIKE '%+%'
-        GROUP BY 1
-      )
-      , trigram_frequencies AS
-      (
-        SELECT *,
-          (1.0* count ) / (SELECT sum(count) FROM trigram_counts) AS frequency
-        FROM trigram_counts
-      )
-      SELECT *, SUM(frequency) OVER (
-          ORDER BY frequency DESC ROWS UNBOUNDED PRECEDING
-      ) AS cumulative_frequency
-      FROM trigram_frequencies
-      GROUP BY trigram
-      ORDER BY cumulative_frequency, count DESC, trigram
-    """)
-    logging.debug('SQLite trigram_counts view created')
-
-    self.db_connection.commit()
-    self.ensure_sqlite_files_are_owner_only()
-    self.last_sqlite_commit_time = time.monotonic()
-    logging.info(f'SQLite database set up: {self.config.sqlite_file_name}')
+    self.prepare_sqlite_file()
+    self.open_sqlite_connection()
+    self.configure_sqlite_journal_mode()
+    self.create_sqlite_tables()
+    self.create_sqlite_views()
+    self.finish_sqlite_setup()
 
   def log(self, key):
     """
