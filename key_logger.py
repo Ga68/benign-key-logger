@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 
-from pynput.keyboard import Key, Listener
+from pynput.keyboard import Key, KeyCode, Listener
 
 
 # ######### #### ######## ##########
@@ -329,6 +329,21 @@ def key_to_str(key):
   return s
 
 
+def normalize_ctrl_character(key, modifiers_down):
+  if Key.ctrl not in modifiers_down:
+    return key
+
+  key_str = key_to_str(key)
+  if len(key_str) != 1:
+    return key
+
+  codepoint = ord(key_str)
+  if codepoint < 1 or codepoint > 26:
+    return key
+
+  return KeyCode.from_char(chr(ord('a') + codepoint - 1))
+
+
 class KeyLoggerApp:
   # `KeyLoggerApp` owns the mutable state and side effects of a single run.
   def __init__(self, config):
@@ -549,9 +564,13 @@ class KeyLoggerApp:
         for k in modifiers_down
     ])) == [Key.shift] and key_is_a_symbol(key):
       modifiers_down = []
+    normalized_key = normalize_ctrl_character(
+        canonicalize_key(key),
+        modifiers_down
+    )
     log_entry = ' + '.join(
         sorted([key_to_str(k) for k in modifiers_down])
-        + [key_to_str(canonicalize_key(key))]
+        + [key_to_str(normalized_key)]
     )
     if self.config.echo_keys_to_stdout:
       logging.info(f'key: {log_entry}')
