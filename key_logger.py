@@ -16,6 +16,8 @@
 
 import argparse
 import logging
+import os
+import stat
 from pynput.keyboard import Key, Listener
 
 
@@ -30,6 +32,7 @@ ECHO_KEYS_TO_STDOUT = False
 
 LOG_FILE_NAME = 'key_log.txt'
 SQLITE_FILE_NAME = 'key_log.sqlite'
+OWNER_ONLY_FILE_MODE = 0o600
 
 # ######### ####### ##### ##########
 # ######### Logging Setup ##########
@@ -88,6 +91,43 @@ REMAP = {
 
 keys_currently_down = []
 
+def get_file_mode(path):
+  return stat.S_IMODE(os.stat(path).st_mode)
+
+
+def ensure_owner_only_permissions(path):
+  if not os.path.exists(path):
+    return
+
+  current_mode = get_file_mode(path)
+  if current_mode != OWNER_ONLY_FILE_MODE:
+    logging.warning(
+        f'tightening file permissions for {path}: '
+        f'{oct(current_mode)} -> {oct(OWNER_ONLY_FILE_MODE)}'
+    )
+    os.chmod(path, OWNER_ONLY_FILE_MODE)
+
+
+def ensure_sqlite_files_are_owner_only():
+  for path in [
+      SQLITE_FILE_NAME,
+      f'{SQLITE_FILE_NAME}-journal',
+      f'{SQLITE_FILE_NAME}-wal',
+      f'{SQLITE_FILE_NAME}-shm',
+  ]:
+    ensure_owner_only_permissions(path)
+
+
+def open_owner_only_log_file(path):
+  fd = os.open(
+      path,
+      os.O_APPEND | os.O_CREAT | os.O_WRONLY,
+      OWNER_ONLY_FILE_MODE
+  )
+  ensure_owner_only_permissions(path)
+  return os.fdopen(fd, 'a')
+
+
 # ######### ####### ######### ##########
 # ######### Logging Functions ##########
 # ######### ####### ######### ##########
@@ -119,6 +159,9 @@ def setup_sqlite_database():
   """
   global db_connection
   global db_cursor
+  if not os.path.exists(SQLITE_FILE_NAME):
+    with open_owner_only_log_file(SQLITE_FILE_NAME):
+      pass
   db_connection = sqlite3.connect(
       SQLITE_FILE_NAME,
       check_same_thread=False,
@@ -126,6 +169,7 @@ def setup_sqlite_database():
       # in a spawned thread (a decision of the pynput library) separate
       # from this python script.
   )
+  ensure_sqlite_files_are_owner_only()
   db_cursor = db_connection.cursor()
   logging.debug('SQLite connection and cursor created')
 
@@ -235,6 +279,7 @@ def setup_sqlite_database():
   logging.debug('SQLite trigram_counts view created')
 
   db_connection.commit()
+  ensure_sqlite_files_are_owner_only()
   logging.info(f'SQLite database set up: {SQLITE_FILE_NAME}')
 
 
@@ -292,10 +337,11 @@ def log(key):
         row_values
     )
     db_connection.commit()
+    ensure_sqlite_files_are_owner_only()
     logging.debug(f'logged to SQLite:key_log {row_values}')
 
   if SEND_LOGS_TO_FILE:
-    with open(LOG_FILE_NAME, 'a') as log_file:  # append mode
+    with open_owner_only_log_file(LOG_FILE_NAME) as log_file:  # append mode
       log_file.write(f'{log_entry}\n')
       logging.debug(f'logged to file: {log_entry}')
 
@@ -311,6 +357,7 @@ def full_log(key, event):
         row_values
     )
     db_connection.commit()
+    ensure_sqlite_files_are_owner_only()
     logging.debug(f'logged to SQLite:full_key_log {row_values}')
 
 

@@ -37,6 +37,8 @@ There are two ways to store the output (the key log). In both cases, it's put in
 
 [SQLite](https://sqlite.org/index.html) is the default option. You can swap that or turn both on if you wish, but both *off* would be an odd choice.
 
+Because the output contains sensitive data, the logger now creates its log files with owner-only permissions (`0600`) and will tighten existing log files if they are more permissive. That applies to the text log, the main SQLite file, and the common SQLite sidecar files (`-journal`, `-wal`, and `-shm`) if they exist.
+
 I chose [SQLite](https://sqlite.org/index.html) because the output is a single file that you can delete anytime you want, and it doesn't require any separate database engine. If you're not familiar with it, it's much like putting your data in a text file, one entry per line, but it does so in a structured way that, when you use a program that knows how to read that structure, gives you the power of SQL. The nice thing is that 100% of the data, meta data, etc. is in that one file. And having the entries in a database, does provide some advantages (if you know SQL) when you want to answer questions like "Show me the keys I press in descending order, by frequency?" or "What percentage of key strokes is the space bar?" You can even do some fun stuff like "How fast do I type?" (since timestamps are maintained in the SQLite log), "Do I type more during odd or even hours of the day?", and other, life changing questions-and-answers. A basic version of this is built into the SQLite output file, in the form of predefined views.
 
 Among other options, two applications I use to look at and query the SQLite data file are
@@ -64,6 +66,10 @@ You'll need to install `pynput`. You can see more details on that library from [
 I run it from the Terminal with `python3 key_logger.py`. If you explicitly want the captured keys echoed to stdout while the program runs, use `python3 key_logger.py --stdout`.
 
 You could add execution permissions to the file (`chmod +x key_logger.py`) and then run it like a script (`./key_logger.py`), since it does have the Python shebang at the top; however, in the spirit of being *benign*, I don't like the idea of making the file executable, even though I know it's not an EXE, but ¯\\\_(ツ)\_/¯.
+
+### Local Data Safety
+
+This tool does not send your data anywhere, but the files it writes are still sensitive. They contain raw keystrokes and should remain owner-only on disk. The program now enforces that automatically for the files it creates and warns when it has to tighten existing permissions, which helps reduce local disclosure risk on shared machines or under a permissive `umask`.
 
 ## Screenshots
 
