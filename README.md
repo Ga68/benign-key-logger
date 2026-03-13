@@ -35,7 +35,7 @@ There are two ways to store the output (the key log). In both cases, it's put in
 1. Put every key stroke into a text file, one entry per line
 2. Put every key stroke into a [SQLite](https://sqlite.org/index.html) database
 
-[SQLite](https://sqlite.org/index.html) is the default option. You can swap that or turn both on if you wish, but both *off* would be an odd choice.
+[SQLite](https://sqlite.org/index.html) is the default option. You can swap that or turn both on if you wish. The main storage options are exposed through the command line now instead of requiring you to edit the script.
 
 Because the output contains sensitive data, the logger now creates its log files with owner-only permissions (`0600`) and will tighten existing log files if they are more permissive. That applies to the text log, the main SQLite file, and the common SQLite sidecar files (`-journal`, `-wal`, and `-shm`) if they exist.
 
@@ -43,7 +43,7 @@ I chose [SQLite](https://sqlite.org/index.html) because the output is a single f
 
 To avoid paying the full SQLite commit cost on every single keystroke, the logger batches writes and commits them every 50 events or every 5 seconds, whichever comes first, and then performs a final flush on clean shutdown. The event threshold is chosen to be roughly consistent with a fast typist around 100 WPM.
 
-If you want better behavior while inspecting the database at the same time the logger is writing to it, there is also an `ENABLE_SQLITE_WAL` setting in the script. It is `False` by default to keep the file model as simple as possible. If you turn it on, SQLite uses write-ahead logging, which can improve read/write concurrency, but it also means you should expect sidecar files like `-wal` and `-shm` to appear while the database is active.
+If you want better behavior while inspecting the database at the same time the logger is writing to it, there is also a `--wal` option. It is off by default to keep the file model as simple as possible. If you turn it on, SQLite uses write-ahead logging, which can improve read/write concurrency, but it also means you should expect sidecar files like `-wal` and `-shm` to appear while the database is active.
 
 Among other options, two applications I use to look at and query the SQLite data file are
 - [SQLiteStudio](https://sqlitestudio.pl/)
@@ -68,6 +68,17 @@ You'll need to install `pynput`. You can see more details on that library from [
 ### Running It
 
 I run it from the Terminal with `python3 key_logger.py`. If you explicitly want the captured keys echoed to stdout while the program runs, use `python3 key_logger.py --stdout`.
+
+You can see the available options at any time with `python3 key_logger.py --help`.
+
+Some common examples:
+
+- Default SQLite logging: `python3 key_logger.py`
+- SQLite plus plaintext log file: `python3 key_logger.py --file`
+- Plaintext file only: `python3 key_logger.py --no-sqlite --file`
+- SQLite with the verbose full event table: `python3 key_logger.py --full-events`
+- SQLite with WAL enabled for concurrent inspection: `python3 key_logger.py --wal`
+- Custom output filenames: `python3 key_logger.py --sqlite-file my_keys.sqlite --log-file my_keys.txt --file`
 
 You could add execution permissions to the file (`chmod +x key_logger.py`) and then run it like a script (`./key_logger.py`), since it does have the Python shebang at the top; however, in the spirit of being *benign*, I don't like the idea of making the file executable, even though I know it's not an EXE, but ¯\\\_(ツ)\_/¯.
 

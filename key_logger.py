@@ -54,9 +54,6 @@ if SEND_LOGS_TO_SQLITE:
   from datetime import datetime
   import sqlite3
 
-if SEND_LOGS_TO_FILE:
-  logging.info(f'File used for logging: {LOG_FILE_NAME}')
-
 # ######### ###### ######### ##########
 # ######### Global Variables ##########
 # ######### ###### ######### ##########
@@ -588,23 +585,105 @@ def preprocess(key, f):
 
 
 def main():
+  global SEND_LOGS_TO_SQLITE
+  global SEND_ALL_EVENTS_TO_SQLITE
+  global SEND_LOGS_TO_FILE
   global ECHO_KEYS_TO_STDOUT
+  global LOG_FILE_NAME
+  global SQLITE_FILE_NAME
+  global ENABLE_SQLITE_WAL
 
   parser = argparse.ArgumentParser(
       description=(
-          'Track your own key usage locally and optionally echo captured '
-          'keys to stdout.'
+          'Track your own key usage locally with configurable SQLite, text, '
+          'stdout, and WAL options.'
       )
+  )
+  parser.add_argument(
+      '--sqlite',
+      dest='send_logs_to_sqlite',
+      action='store_true',
+      help='write the main key log to SQLite'
+  )
+  parser.add_argument(
+      '--no-sqlite',
+      dest='send_logs_to_sqlite',
+      action='store_false',
+      help='disable the main SQLite key log'
+  )
+  parser.add_argument(
+      '--file',
+      dest='send_logs_to_file',
+      action='store_true',
+      help='write captured keys to a plaintext log file'
+  )
+  parser.add_argument(
+      '--no-file',
+      dest='send_logs_to_file',
+      action='store_false',
+      help='disable the plaintext log file'
+  )
+  parser.add_argument(
+      '--full-events',
+      dest='send_all_events_to_sqlite',
+      action='store_true',
+      help='record every key up/down event in the SQLite full_key_log table'
+  )
+  parser.add_argument(
+      '--no-full-events',
+      dest='send_all_events_to_sqlite',
+      action='store_false',
+      help='disable the SQLite full event log table'
   )
   parser.add_argument(
       '--stdout',
       action='store_true',
       help='echo captured keys to stdout while logging'
   )
+  parser.add_argument(
+      '--sqlite-file',
+      default=SQLITE_FILE_NAME,
+      help='path to the SQLite database file'
+  )
+  parser.add_argument(
+      '--log-file',
+      default=LOG_FILE_NAME,
+      help='path to the plaintext log file'
+  )
+  parser.add_argument(
+      '--wal',
+      dest='enable_sqlite_wal',
+      action='store_true',
+      help='enable SQLite write-ahead logging'
+  )
+  parser.add_argument(
+      '--no-wal',
+      dest='enable_sqlite_wal',
+      action='store_false',
+      help='disable SQLite write-ahead logging'
+  )
+  parser.set_defaults(
+      send_logs_to_sqlite=SEND_LOGS_TO_SQLITE,
+      send_logs_to_file=SEND_LOGS_TO_FILE,
+      send_all_events_to_sqlite=SEND_ALL_EVENTS_TO_SQLITE,
+      enable_sqlite_wal=ENABLE_SQLITE_WAL,
+  )
   args = parser.parse_args()
+
+  if args.send_all_events_to_sqlite and not args.send_logs_to_sqlite:
+    parser.error('--full-events requires SQLite logging; remove --no-sqlite')
+
+  SEND_LOGS_TO_SQLITE = args.send_logs_to_sqlite
+  SEND_ALL_EVENTS_TO_SQLITE = args.send_all_events_to_sqlite
+  SEND_LOGS_TO_FILE = args.send_logs_to_file
   ECHO_KEYS_TO_STDOUT = args.stdout
+  LOG_FILE_NAME = args.log_file
+  SQLITE_FILE_NAME = args.sqlite_file
+  ENABLE_SQLITE_WAL = args.enable_sqlite_wal
 
   logging.info('getting set up')
+  if SEND_LOGS_TO_FILE:
+    logging.info(f'File used for logging: {LOG_FILE_NAME}')
   if SEND_LOGS_TO_SQLITE:
     setup_sqlite_database()
 
