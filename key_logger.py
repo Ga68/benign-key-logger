@@ -106,6 +106,7 @@ class Config:
 
 def build_parser():
   parser = argparse.ArgumentParser(
+      formatter_class=argparse.ArgumentDefaultsHelpFormatter,
       description=(
           'Track your own key usage locally with configurable SQLite, text, '
           'stdout, and WAL options.'
@@ -683,8 +684,19 @@ class KeyLoggerApp:
 
   def run(self):
     logging.info('getting set up')
-    if self.config.send_logs_to_file:
-      logging.info(f'File used for logging: {self.config.log_file_name}')
+    logging.info(
+        'effective config: '
+        f'sqlite={"on" if self.config.send_logs_to_sqlite else "off"}, '
+        f'full_events={"on" if self.config.send_all_events_to_sqlite else "off"}, '
+        f'file={"on" if self.config.send_logs_to_file else "off"}, '
+        f'stdout={"on" if self.config.echo_keys_to_stdout else "off"}, '
+        f'wal={"on" if self.config.enable_sqlite_wal else "off"}'
+    )
+    logging.info(
+        'output paths: '
+        f'sqlite={self.config.sqlite_file_name}, '
+        f'file={self.config.log_file_name}'
+    )
     if self.config.send_logs_to_sqlite:
       self.setup_sqlite_database()
 

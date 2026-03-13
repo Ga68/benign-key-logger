@@ -22,7 +22,7 @@ Comment the code extensively to explain not only what's happening, but additiona
 
 ### Comments
 
-The code is **heavily** commented; perhaps excessively so. In fact, the code looks long, but it's mostly `# comments`. (At the moment that I'm writing this, the actual code is a little less than half the lines in the program.) This is in the spirit of transparency and being *benign*. I want to make sure that every decision in the code is clear, both in what it does and why it's there.
+The code is still written in the spirit of transparency, but these days that clarity comes from a mix of comments and explicit structure. The script is organized around a small configuration object and a single application object so the runtime state is easier to follow than when everything lived in globals. I still want every important decision to be easy to audit, both in what it does and why it's there.
 
 ### OS & Language
 
@@ -71,6 +71,8 @@ I run it from the Terminal with `python3 key_logger.py`. If you explicitly want 
 
 You can see the available options at any time with `python3 key_logger.py --help`.
 
+The help output shows the current defaults, and the program prints a short startup summary of the effective configuration and output paths when it begins listening.
+
 Some common examples:
 
 - Default SQLite logging: `python3 key_logger.py`
@@ -85,6 +87,19 @@ You could add execution permissions to the file (`chmod +x key_logger.py`) and t
 ### Local Data Safety
 
 This tool does not send your data anywhere, but the files it writes are still sensitive. They contain raw keystrokes and should remain owner-only on disk. The program now enforces that automatically for the files it creates and warns when it has to tighten existing permissions, which helps reduce local disclosure risk on shared machines or under a permissive `umask`.
+
+### Audit Checklist
+
+If you want a quick trust checklist before running it, here are the main things to verify:
+
+- No network behavior: the script imports no networking libraries and sends nothing anywhere.
+- Stdout echo is off by default: keystrokes are only printed to the terminal if you pass `--stdout`.
+- SQLite is on by default: the main log goes to a local SQLite file unless you disable it with `--no-sqlite`.
+- Plaintext file logging is off by default: the text log is only enabled with `--file`.
+- Output files are owner-only: the logger creates or tightens log files to `0600`, including SQLite sidecar files when present.
+- Full event capture is opt-in: `--full-events` enables the more verbose key up/down table in SQLite.
+- WAL is opt-in: `--wal` enables SQLite write-ahead logging for concurrent inspection.
+- Password handling depends on the OS: on macOS, secure input mode usually suppresses logging in password fields, but that behavior is provided by the OS, not by custom filtering in this script.
 
 ## Screenshots
 
