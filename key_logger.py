@@ -93,6 +93,30 @@ REMAP = {
     Key.shift_l: Key.shift,
 }
 
+SHIFTED_KEY_EQUIVALENTS = {
+    '`': '~',
+    '1': '!',
+    '2': '@',
+    '3': '#',
+    '4': '$',
+    '5': '%',
+    '6': '^',
+    '7': '&',
+    '8': '*',
+    '9': '(',
+    '0': ')',
+    '-': '_',
+    '=': '+',
+    '[': '{',
+    ']': '}',
+    '\\': '|',
+    ';': ':',
+    "'": '"',
+    ',': '<',
+    '.': '>',
+    '/': '?',
+}
+
 KEY_COUNTS_VIEW_SQL = """
   CREATE VIEW IF NOT EXISTS key_counts AS
   WITH frequencies AS (
@@ -344,6 +368,26 @@ def normalize_ctrl_character(key, modifiers_down):
   return KeyCode.from_char(chr(ord('a') + codepoint - 1))
 
 
+def equivalent_shifted_keys(key):
+  key_str = key_to_str(key)
+  if len(key_str) != 1:
+    return set()
+
+  equivalents = set()
+  if key_str.isalpha():
+    equivalents.add(key_str.swapcase())
+
+  shifted_pair = SHIFTED_KEY_EQUIVALENTS.get(key_str)
+  if shifted_pair is not None:
+    equivalents.add(shifted_pair)
+
+  for unshifted, shifted in SHIFTED_KEY_EQUIVALENTS.items():
+    if key_str == shifted:
+      equivalents.add(unshifted)
+
+  return equivalents
+
+
 class KeyLoggerApp:
   # `KeyLoggerApp` owns the mutable state and side effects of a single run.
   def __init__(self, config):
@@ -427,6 +471,18 @@ class KeyLoggerApp:
     self.db_connection.close()
     self.db_connection = None
     self.db_cursor = None
+
+  def reconcile_shift_mismatch(self, key):
+    for equivalent_key_str in equivalent_shifted_keys(key):
+      equivalent_key = KeyCode.from_char(equivalent_key_str)
+      if equivalent_key in self.keys_currently_down:
+        self.keys_currently_down.remove(equivalent_key)
+        logging.debug(
+            'reconciled shifted key mismatch: '
+            f'{key_to_str(equivalent_key)} cleared by {key_to_str(key)} up event'
+        )
+        return True
+    return False
 
   def prepare_sqlite_file(self):
     if not os.path.exists(self.config.sqlite_file_name):
@@ -688,7 +744,10 @@ class KeyLoggerApp:
     try:
       self.keys_currently_down.remove(key)
     except ValueError:
-      logging.warning(f'{key_to_str(key)} up event without a paired down event')
+      if self.reconcile_shift_mismatch(key):
+        pass
+      else:
+        logging.warning(f'{key_to_str(key)} up event without a paired down event')
       if len(self.keys_currently_down) >= LOCKED_IN_GARBAGE_COLLECTION_LIMIT:
         logging.debug('key-down count is above locked-in limit')
         number_of_modifiers_down = len([
