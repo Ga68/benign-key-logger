@@ -94,6 +94,8 @@ REMAP = {
 keys_currently_down = []
 pending_sqlite_writes = 0
 last_sqlite_commit_time = None
+db_connection = None
+db_cursor = None
 
 def get_file_mode(path):
   return stat.S_IMODE(os.stat(path).st_mode)
@@ -168,6 +170,19 @@ def note_pending_sqlite_write():
   commit_sqlite_if_needed()
 
 
+def close_sqlite_connection():
+  global db_connection
+  global db_cursor
+
+  if db_connection is None:
+    return
+
+  commit_sqlite_if_needed(force=True)
+  db_connection.close()
+  db_connection = None
+  db_cursor = None
+
+
 # ######### ####### ######### ##########
 # ######### Logging Functions ##########
 # ######### ####### ######### ##########
@@ -215,7 +230,7 @@ def setup_sqlite_database():
   db_cursor = db_connection.cursor()
   pending_sqlite_writes = 0
   last_sqlite_commit_time = time.monotonic()
-  atexit.register(lambda: commit_sqlite_if_needed(force=True))
+  atexit.register(close_sqlite_connection)
   logging.debug('SQLite connection and cursor created')
 
   if ENABLE_SQLITE_WAL:
