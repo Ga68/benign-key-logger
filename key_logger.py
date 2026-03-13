@@ -37,6 +37,7 @@ SQLITE_FILE_NAME = 'key_log.sqlite'
 OWNER_ONLY_FILE_MODE = 0o600
 SQLITE_COMMIT_EVERY_N_EVENTS = 50
 SQLITE_COMMIT_EVERY_SECONDS = 5.0
+ENABLE_SQLITE_WAL = False
 
 # ######### ####### ##### ##########
 # ######### Logging Setup ##########
@@ -219,6 +220,11 @@ def setup_sqlite_database():
   last_sqlite_commit_time = time.monotonic()
   atexit.register(lambda: commit_sqlite_if_needed(force=True))
   logging.debug('SQLite connection and cursor created')
+
+  if ENABLE_SQLITE_WAL:
+    db_cursor.execute('PRAGMA journal_mode=WAL')
+    ensure_sqlite_files_are_owner_only()
+    logging.info('SQLite WAL mode enabled')
 
   db_cursor.execute("""
       CREATE TABLE IF NOT EXISTS key_log

@@ -43,6 +43,8 @@ I chose [SQLite](https://sqlite.org/index.html) because the output is a single f
 
 To avoid paying the full SQLite commit cost on every single keystroke, the logger batches writes and commits them every 50 events or every 5 seconds, whichever comes first, and then performs a final flush on clean shutdown. The event threshold is chosen to be roughly consistent with a fast typist around 100 WPM.
 
+If you want better behavior while inspecting the database at the same time the logger is writing to it, there is also an `ENABLE_SQLITE_WAL` setting in the script. It is `False` by default to keep the file model as simple as possible. If you turn it on, SQLite uses write-ahead logging, which can improve read/write concurrency, but it also means you should expect sidecar files like `-wal` and `-shm` to appear while the database is active.
+
 Among other options, two applications I use to look at and query the SQLite data file are
 - [SQLiteStudio](https://sqlitestudio.pl/)
 - [DB Browser for SQLite](https://sqlitebrowser.org/)
