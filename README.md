@@ -45,13 +45,15 @@ To avoid paying the full SQLite commit cost on every single keystroke, the logge
 
 If you want better behavior while inspecting the database at the same time the logger is writing to it, there is also a `--wal` option. It is off by default to keep the file model as simple as possible. If you turn it on, SQLite uses write-ahead logging, which can improve read/write concurrency, but it also means you should expect sidecar files like `-wal` and `-shm` to appear while the database is active.
 
+By default the logger records the resulting character or combo, so `Shift+a` is logged as `A`. If you would rather log the physical key plus modifiers, use `--physical-keys`. In that mode, `Shift+a` is logged as `<shift> + a`, and similarly `Shift+1` is logged as `<shift> + 1`.
+
 Among other options, two applications I use to look at and query the SQLite data file are
 - [SQLiteStudio](https://sqlitestudio.pl/)
 - [DB Browser for SQLite](https://sqlitebrowser.org/)
 
 ### Logging
 
-The Python logging module is used to provide INFO, DEBUG, WARNING, etc. messages. Those operational messages still go to the screen, not to a file. However, the actual captured key strokes are **not** echoed to stdout by default anymore. Terminal scrollback often persists much longer than people expect, so printing every key press by default creates a second plaintext copy of the data. If you want to watch the key stream in the terminal while the logger runs, you can opt in with the `--stdout` flag described below. If you want to see the program's internal state transitions, remapping decisions, batching activity, and similar implementation details without echoing your keystrokes, use `--debug`. By default the logger shows only INFO (and above) messages.
+The Python logging module is used to provide INFO, DEBUG, WARNING, etc. messages. Those operational messages still go to the screen, not to a file. However, the actual captured key strokes are **not** echoed to stdout by default anymore. Terminal scrollback often persists much longer than people expect, so printing every key press by default creates a second plaintext copy of the data. If you want to watch the key stream in the terminal while the logger runs, you can opt in with the `--stdout` flag described below. If you want to see the program's internal state transitions, remapping decisions, batching activity, and similar implementation details without echoing your keystrokes, use `--debug`. By default the logger shows only INFO (and above) messages. If you want the logged content itself to represent physical keys instead of resulting characters, use `--physical-keys`.
 
 ## Usage
 
@@ -76,11 +78,13 @@ The help output shows the current defaults, and the program prints a short start
 Some common examples:
 
 - Default SQLite logging: `python3 key_logger.py`
+- Physical key logging instead of resulting characters: `python3 key_logger.py --physical-keys`
 - Inspect the logger's internal behavior without echoing captured keys: `python3 key_logger.py --debug`
 - SQLite plus plaintext log file: `python3 key_logger.py --file`
 - Plaintext file only: `python3 key_logger.py --no-sqlite --file`
 - SQLite with the verbose full event table: `python3 key_logger.py --full-events`
 - SQLite with WAL enabled for concurrent inspection: `python3 key_logger.py --wal`
+- Physical key logging plus live echo: `python3 key_logger.py --physical-keys --stdout`
 - Show both internal debug output and live key echo: `python3 key_logger.py --debug --stdout`
 - Custom output filenames: `python3 key_logger.py --sqlite-file my_keys.sqlite --log-file my_keys.txt --file`
 
@@ -96,6 +100,7 @@ If you want a quick trust checklist before running it, here are the main things 
 
 - No network behavior: the script imports no networking libraries and sends nothing anywhere.
 - Debug output is opt-in: `--debug` enables internal state logging but does not imply key echo.
+- Physical key logging is opt-in: `--physical-keys` switches from logging the resulting character to logging the physical key plus modifiers.
 - Stdout echo is off by default: keystrokes are only printed to the terminal if you pass `--stdout`.
 - SQLite is on by default: the main log goes to a local SQLite file unless you disable it with `--no-sqlite`.
 - Plaintext file logging is off by default: the text log is only enabled with `--file`.

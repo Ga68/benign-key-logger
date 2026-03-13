@@ -36,6 +36,7 @@ DEFAULT_SEND_ALL_EVENTS_TO_SQLITE = False
 DEFAULT_SEND_LOGS_TO_FILE = False
 DEFAULT_ECHO_KEYS_TO_STDOUT = False
 DEFAULT_DEBUG = False
+DEFAULT_LOG_PHYSICAL_KEYS = False
 
 DEFAULT_LOG_FILE_NAME = 'key_log.txt'
 DEFAULT_SQLITE_FILE_NAME = 'key_log.sqlite'
@@ -211,6 +212,7 @@ class Config:
   send_logs_to_file: bool = DEFAULT_SEND_LOGS_TO_FILE
   echo_keys_to_stdout: bool = DEFAULT_ECHO_KEYS_TO_STDOUT
   debug: bool = DEFAULT_DEBUG
+  log_physical_keys: bool = DEFAULT_LOG_PHYSICAL_KEYS
   log_file_name: str = DEFAULT_LOG_FILE_NAME
   sqlite_file_name: str = DEFAULT_SQLITE_FILE_NAME
   enable_sqlite_wal: bool = DEFAULT_ENABLE_SQLITE_WAL
@@ -260,6 +262,11 @@ def build_parser():
       dest='send_all_events_to_sqlite',
       action='store_false',
       help='disable the SQLite full event log table'
+  )
+  parser.add_argument(
+      '--physical-keys',
+      action='store_true',
+      help='log the physical key plus modifiers instead of the resulting character'
   )
   parser.add_argument(
       '--debug',
@@ -315,6 +322,7 @@ def parse_args(argv=None):
       send_logs_to_file=args.send_logs_to_file,
       echo_keys_to_stdout=args.stdout,
       debug=args.debug,
+      log_physical_keys=args.physical_keys,
       log_file_name=args.log_file,
       sqlite_file_name=args.sqlite_file,
       enable_sqlite_wal=args.enable_sqlite_wal,
@@ -366,6 +374,34 @@ def normalize_ctrl_character(key, modifiers_down):
     return key
 
   return KeyCode.from_char(chr(ord('a') + codepoint - 1))
+
+
+def normalize_shifted_key_for_physical_logging(key, modifiers_down):
+  if Key.shift not in modifiers_down:
+    return key
+
+  key_str = key_to_str(key)
+  if len(key_str) != 1:
+    return key
+
+  if key_str.isalpha():
+    return KeyCode.from_char(key_str.lower())
+
+  for unshifted, shifted in SHIFTED_KEY_EQUIVALENTS.items():
+    if key_str == shifted:
+      return KeyCode.from_char(unshifted)
+
+  return key
+
+
+def format_logged_key(key, modifiers_down, log_physical_keys):
+  normalized_key = normalize_ctrl_character(canonicalize_key(key), modifiers_down)
+  if log_physical_keys:
+    normalized_key = normalize_shifted_key_for_physical_logging(
+        normalized_key,
+        modifiers_down
+    )
+  return key_to_str(normalized_key)
 
 
 def equivalent_shifted_keys(key):
@@ -615,18 +651,22 @@ class KeyLoggerApp:
         if k in MODIFIER_KEYS
     ]
     modifiers_down = list(dict.fromkeys(modifiers_down))
-    if list(set([
-        Key.shift if k in [Key.shift, Key.shift_l, Key.shift_r] else k
-        for k in modifiers_down
-    ])) == [Key.shift] and key_is_a_symbol(key):
+    if (
+        not self.config.log_physical_keys
+        and list(set([
+            Key.shift if k in [Key.shift, Key.shift_l, Key.shift_r] else k
+            for k in modifiers_down
+        ])) == [Key.shift]
+        and key_is_a_symbol(key)
+    ):
       modifiers_down = []
-    normalized_key = normalize_ctrl_character(
-        canonicalize_key(key),
-        modifiers_down
-    )
     log_entry = ' + '.join(
         sorted([key_to_str(k) for k in modifiers_down])
-        + [key_to_str(normalized_key)]
+        + [format_logged_key(
+            key,
+            modifiers_down,
+            self.config.log_physical_keys
+        )]
     )
     if self.config.echo_keys_to_stdout:
       logging.info(f'key: {log_entry}')
@@ -802,6 +842,7 @@ class KeyLoggerApp:
         f'full_events={"on" if self.config.send_all_events_to_sqlite else "off"}, '
         f'file={"on" if self.config.send_logs_to_file else "off"}, '
         f'debug={"on" if self.config.debug else "off"}, '
+        f'physical_keys={"on" if self.config.log_physical_keys else "off"}, '
         f'stdout={"on" if self.config.echo_keys_to_stdout else "off"}, '
         f'wal={"on" if self.config.enable_sqlite_wal else "off"}'
     )
