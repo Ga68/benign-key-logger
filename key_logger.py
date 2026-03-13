@@ -14,6 +14,7 @@
 # On each key-up event, clear the key from the list of what's being
 #   held down
 
+import argparse
 import logging
 from pynput.keyboard import Key, Listener
 
@@ -25,6 +26,7 @@ from pynput.keyboard import Key, Listener
 SEND_LOGS_TO_SQLITE = True
 SEND_ALL_EVENTS_TO_SQLITE = False
 SEND_LOGS_TO_FILE = False
+ECHO_KEYS_TO_STDOUT = False
 
 LOG_FILE_NAME = 'key_log.txt'
 SQLITE_FILE_NAME = 'key_log.sqlite'
@@ -280,7 +282,8 @@ def log(key):
       sorted([key_to_str(k) for k in modifiers_down])
       + [key_to_str(canonicalize_key(key))]
   )
-  logging.info(f'key: {log_entry}')
+  if ECHO_KEYS_TO_STDOUT:
+    logging.info(f'key: {log_entry}')
 
   if SEND_LOGS_TO_SQLITE:
     row_values = (datetime.utcnow().isoformat(), log_entry)
@@ -486,6 +489,22 @@ def preprocess(key, f):
 
 
 def main():
+  global ECHO_KEYS_TO_STDOUT
+
+  parser = argparse.ArgumentParser(
+      description=(
+          'Track your own key usage locally and optionally echo captured '
+          'keys to stdout.'
+      )
+  )
+  parser.add_argument(
+      '--stdout',
+      action='store_true',
+      help='echo captured keys to stdout while logging'
+  )
+  args = parser.parse_args()
+  ECHO_KEYS_TO_STDOUT = args.stdout
+
   logging.info('getting set up')
   if SEND_LOGS_TO_SQLITE:
     setup_sqlite_database()

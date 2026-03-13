@@ -45,7 +45,7 @@ Among other options, two applications I use to look at and query the SQLite data
 
 ### Logging
 
-The Python logging module is used to provide INFO, DEBUG, WARNING, etc. messages. As written, this goes to the screen, not to a file. So if you run this from the terminal, you'll see a stream of key strokes rolling on by. If you want it in a file, you could; however, given the goal of trying to stay benign, I decided the screen made more sense to keep that information "ephemeral". By default it's written to show only INFO (and above) messages—no DEBUG information—but you can change that and enjoy the copious DEBUG entries screaming on down your output window, if that's your thing.
+The Python logging module is used to provide INFO, DEBUG, WARNING, etc. messages. Those operational messages still go to the screen, not to a file. However, the actual captured key strokes are **not** echoed to stdout by default anymore. Terminal scrollback often persists much longer than people expect, so printing every key press by default creates a second plaintext copy of the data. If you want to watch the key stream in the terminal while the logger runs, you can opt in with the `--stdout` flag described below. By default the logger is written to show only INFO (and above) messages—no DEBUG information—but you can change that and enjoy the copious DEBUG entries screaming on down your output window, if that's your thing.
 
 ## Usage
 
@@ -61,7 +61,9 @@ You'll need to install `pynput`. You can see more details on that library from [
 
 ### Running It
 
-I run it from the Terminal with `python3 key_logger.py`. You could add execution permissions to the file (`chmod +x key_logger.py`) and then run it like a script (`./key_logger.py`), since it does have the Python shebang at the top; however, in the spirit of being *benign*, I don't like the idea of making the file executable, even though I know it's not an EXE, but ¯\\\_(ツ)\_/¯.
+I run it from the Terminal with `python3 key_logger.py`. If you explicitly want the captured keys echoed to stdout while the program runs, use `python3 key_logger.py --stdout`.
+
+You could add execution permissions to the file (`chmod +x key_logger.py`) and then run it like a script (`./key_logger.py`), since it does have the Python shebang at the top; however, in the spirit of being *benign*, I don't like the idea of making the file executable, even though I know it's not an EXE, but ¯\\\_(ツ)\_/¯.
 
 ## Screenshots
 
