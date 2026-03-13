@@ -35,6 +35,7 @@ DEFAULT_SEND_LOGS_TO_SQLITE = True
 DEFAULT_SEND_ALL_EVENTS_TO_SQLITE = False
 DEFAULT_SEND_LOGS_TO_FILE = False
 DEFAULT_ECHO_KEYS_TO_STDOUT = False
+DEFAULT_DEBUG = False
 
 DEFAULT_LOG_FILE_NAME = 'key_log.txt'
 DEFAULT_SQLITE_FILE_NAME = 'key_log.sqlite'
@@ -185,6 +186,7 @@ class Config:
   send_all_events_to_sqlite: bool = DEFAULT_SEND_ALL_EVENTS_TO_SQLITE
   send_logs_to_file: bool = DEFAULT_SEND_LOGS_TO_FILE
   echo_keys_to_stdout: bool = DEFAULT_ECHO_KEYS_TO_STDOUT
+  debug: bool = DEFAULT_DEBUG
   log_file_name: str = DEFAULT_LOG_FILE_NAME
   sqlite_file_name: str = DEFAULT_SQLITE_FILE_NAME
   enable_sqlite_wal: bool = DEFAULT_ENABLE_SQLITE_WAL
@@ -236,6 +238,11 @@ def build_parser():
       help='disable the SQLite full event log table'
   )
   parser.add_argument(
+      '--debug',
+      action='store_true',
+      help='show internal debug logging without implying key echo'
+  )
+  parser.add_argument(
       '--stdout',
       action='store_true',
       help='echo captured keys to stdout while logging'
@@ -283,6 +290,7 @@ def parse_args(argv=None):
       send_all_events_to_sqlite=args.send_all_events_to_sqlite,
       send_logs_to_file=args.send_logs_to_file,
       echo_keys_to_stdout=args.stdout,
+      debug=args.debug,
       log_file_name=args.log_file,
       sqlite_file_name=args.sqlite_file,
       enable_sqlite_wal=args.enable_sqlite_wal,
@@ -706,12 +714,16 @@ class KeyLoggerApp:
     return handler(key)
 
   def run(self):
+    if self.config.debug:
+      logging.getLogger().setLevel(logging.DEBUG)
+
     logging.info('getting set up')
     logging.info(
         'effective config: '
         f'sqlite={"on" if self.config.send_logs_to_sqlite else "off"}, '
         f'full_events={"on" if self.config.send_all_events_to_sqlite else "off"}, '
         f'file={"on" if self.config.send_logs_to_file else "off"}, '
+        f'debug={"on" if self.config.debug else "off"}, '
         f'stdout={"on" if self.config.echo_keys_to_stdout else "off"}, '
         f'wal={"on" if self.config.enable_sqlite_wal else "off"}'
     )

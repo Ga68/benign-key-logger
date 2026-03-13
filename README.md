@@ -51,7 +51,7 @@ Among other options, two applications I use to look at and query the SQLite data
 
 ### Logging
 
-The Python logging module is used to provide INFO, DEBUG, WARNING, etc. messages. Those operational messages still go to the screen, not to a file. However, the actual captured key strokes are **not** echoed to stdout by default anymore. Terminal scrollback often persists much longer than people expect, so printing every key press by default creates a second plaintext copy of the data. If you want to watch the key stream in the terminal while the logger runs, you can opt in with the `--stdout` flag described below. By default the logger is written to show only INFO (and above) messages—no DEBUG information—but you can change that and enjoy the copious DEBUG entries screaming on down your output window, if that's your thing.
+The Python logging module is used to provide INFO, DEBUG, WARNING, etc. messages. Those operational messages still go to the screen, not to a file. However, the actual captured key strokes are **not** echoed to stdout by default anymore. Terminal scrollback often persists much longer than people expect, so printing every key press by default creates a second plaintext copy of the data. If you want to watch the key stream in the terminal while the logger runs, you can opt in with the `--stdout` flag described below. If you want to see the program's internal state transitions, remapping decisions, batching activity, and similar implementation details without echoing your keystrokes, use `--debug`. By default the logger shows only INFO (and above) messages.
 
 ## Usage
 
@@ -76,10 +76,12 @@ The help output shows the current defaults, and the program prints a short start
 Some common examples:
 
 - Default SQLite logging: `python3 key_logger.py`
+- Inspect the logger's internal behavior without echoing captured keys: `python3 key_logger.py --debug`
 - SQLite plus plaintext log file: `python3 key_logger.py --file`
 - Plaintext file only: `python3 key_logger.py --no-sqlite --file`
 - SQLite with the verbose full event table: `python3 key_logger.py --full-events`
 - SQLite with WAL enabled for concurrent inspection: `python3 key_logger.py --wal`
+- Show both internal debug output and live key echo: `python3 key_logger.py --debug --stdout`
 - Custom output filenames: `python3 key_logger.py --sqlite-file my_keys.sqlite --log-file my_keys.txt --file`
 
 You could add execution permissions to the file (`chmod +x key_logger.py`) and then run it like a script (`./key_logger.py`), since it does have the Python shebang at the top; however, in the spirit of being *benign*, I don't like the idea of making the file executable, even though I know it's not an EXE, but ¯\\\_(ツ)\_/¯.
@@ -93,6 +95,7 @@ This tool does not send your data anywhere, but the files it writes are still se
 If you want a quick trust checklist before running it, here are the main things to verify:
 
 - No network behavior: the script imports no networking libraries and sends nothing anywhere.
+- Debug output is opt-in: `--debug` enables internal state logging but does not imply key echo.
 - Stdout echo is off by default: keystrokes are only printed to the terminal if you pass `--stdout`.
 - SQLite is on by default: the main log goes to a local SQLite file unless you disable it with `--no-sqlite`.
 - Plaintext file logging is off by default: the text log is only enabled with `--file`.
