@@ -37,6 +37,8 @@ DEFAULT_SEND_LOGS_TO_FILE = False
 DEFAULT_ECHO_KEYS_TO_STDOUT = False
 DEFAULT_DEBUG = False
 DEFAULT_LOG_PHYSICAL_KEYS = False
+DEFAULT_TIMESTAMP_FILE_LOGS = False
+DEFAULT_DISTINGUISH_MODIFIER_SIDES = False
 
 DEFAULT_LOG_FILE_NAME = 'key_log.txt'
 DEFAULT_SQLITE_FILE_NAME = 'key_log.sqlite'
@@ -210,9 +212,11 @@ class Config:
   send_logs_to_sqlite: bool = DEFAULT_SEND_LOGS_TO_SQLITE
   send_all_events_to_sqlite: bool = DEFAULT_SEND_ALL_EVENTS_TO_SQLITE
   send_logs_to_file: bool = DEFAULT_SEND_LOGS_TO_FILE
+  timestamp_file_logs: bool = DEFAULT_TIMESTAMP_FILE_LOGS
   echo_keys_to_stdout: bool = DEFAULT_ECHO_KEYS_TO_STDOUT
   debug: bool = DEFAULT_DEBUG
   log_physical_keys: bool = DEFAULT_LOG_PHYSICAL_KEYS
+  distinguish_modifier_sides: bool = DEFAULT_DISTINGUISH_MODIFIER_SIDES
   log_file_name: str = DEFAULT_LOG_FILE_NAME
   sqlite_file_name: str = DEFAULT_SQLITE_FILE_NAME
   enable_sqlite_wal: bool = DEFAULT_ENABLE_SQLITE_WAL
@@ -264,9 +268,19 @@ def build_parser():
       help='disable the SQLite full event log table'
   )
   parser.add_argument(
+      '--file-timestamps',
+      action='store_true',
+      help='prepend UTC timestamps to plaintext log file entries'
+  )
+  parser.add_argument(
       '--physical-keys',
       action='store_true',
       help='log the physical key plus modifiers instead of the resulting character'
+  )
+  parser.add_argument(
+      '--modifier-sides',
+      action='store_true',
+      help='keep left/right modifier keys distinct instead of remapping them'
   )
   parser.add_argument(
       '--debug',
@@ -320,9 +334,11 @@ def parse_args(argv=None):
       send_logs_to_sqlite=args.send_logs_to_sqlite,
       send_all_events_to_sqlite=args.send_all_events_to_sqlite,
       send_logs_to_file=args.send_logs_to_file,
+      timestamp_file_logs=args.file_timestamps,
       echo_keys_to_stdout=args.stdout,
       debug=args.debug,
       log_physical_keys=args.physical_keys,
+      distinguish_modifier_sides=args.modifier_sides,
       log_file_name=args.log_file,
       sqlite_file_name=args.sqlite_file,
       enable_sqlite_wal=args.enable_sqlite_wal,
@@ -333,10 +349,19 @@ def key_is_a_symbol(key):
   return str(key)[0:4] != 'Key.'
 
 
-def canonicalize_key(key):
+def canonicalize_key(key, distinguish_modifier_sides=False):
+  if distinguish_modifier_sides:
+    return key
   if key in REMAP:
     return REMAP[key]
   return key
+
+
+def canonicalized_modifiers(modifiers_down):
+  return {
+      canonicalize_key(modifier)
+      for modifier in modifiers_down
+  }
 
 
 def key_to_str(key):
@@ -362,7 +387,7 @@ def key_to_str(key):
 
 
 def normalize_ctrl_character(key, modifiers_down):
-  if Key.ctrl not in modifiers_down:
+  if Key.ctrl not in canonicalized_modifiers(modifiers_down):
     return key
 
   key_str = key_to_str(key)
@@ -377,7 +402,7 @@ def normalize_ctrl_character(key, modifiers_down):
 
 
 def normalize_shifted_key_for_physical_logging(key, modifiers_down):
-  if Key.shift not in modifiers_down:
+  if Key.shift not in canonicalized_modifiers(modifiers_down):
     return key
 
   key_str = key_to_str(key)
@@ -394,8 +419,16 @@ def normalize_shifted_key_for_physical_logging(key, modifiers_down):
   return key
 
 
-def format_logged_key(key, modifiers_down, log_physical_keys):
-  normalized_key = normalize_ctrl_character(canonicalize_key(key), modifiers_down)
+def format_logged_key(
+    key,
+    modifiers_down,
+    log_physical_keys,
+    distinguish_modifier_sides=False,
+):
+  normalized_key = normalize_ctrl_character(
+      canonicalize_key(key, distinguish_modifier_sides),
+      modifiers_down
+  )
   if log_physical_keys:
     normalized_key = normalize_shifted_key_for_physical_logging(
         normalized_key,
@@ -646,7 +679,7 @@ class KeyLoggerApp:
     conceptually, to miss the mark on logging combos).
     """
     modifiers_down = [
-        canonicalize_key(k)
+        canonicalize_key(k, self.config.distinguish_modifier_sides)
         for k in self.keys_currently_down
         if k in MODIFIER_KEYS
     ]
@@ -665,14 +698,17 @@ class KeyLoggerApp:
         + [format_logged_key(
             key,
             modifiers_down,
-            self.config.log_physical_keys
+            self.config.log_physical_keys,
+            self.config.distinguish_modifier_sides
         )]
     )
     if self.config.echo_keys_to_stdout:
       logging.info(f'key: {log_entry}')
 
+    timestamp_utc = datetime.utcnow().isoformat()
+
     if self.config.send_logs_to_sqlite:
-      row_values = (datetime.utcnow().isoformat(), log_entry)
+      row_values = (timestamp_utc, log_entry)
       self.db_cursor.execute(
           'INSERT INTO key_log VALUES (?, ?)',
           row_values
@@ -682,14 +718,20 @@ class KeyLoggerApp:
 
     if self.config.send_logs_to_file:
       with self.open_owner_only_log_file(self.config.log_file_name) as log_file:
-        log_file.write(f'{log_entry}\n')
+        file_entry = log_entry
+        if self.config.timestamp_file_logs:
+          file_entry = f'{timestamp_utc},{log_entry}'
+        log_file.write(f'{file_entry}\n')
         logging.debug(f'logged to file: {log_entry}')
 
   def full_log(self, key, event):
     if self.config.send_all_events_to_sqlite:
       row_values = (
           datetime.utcnow().isoformat(),
-          key_to_str(canonicalize_key(key)),
+          key_to_str(canonicalize_key(
+              key,
+              self.config.distinguish_modifier_sides
+          )),
           event
       )
       self.db_cursor.execute(
@@ -819,7 +861,10 @@ class KeyLoggerApp:
     ignore left and right shift, by remapping shift_r and shift_l to
     shift, and then ignoring shift.
     """
-    canonical_key = canonicalize_key(key)
+    canonical_key = canonicalize_key(
+        key,
+        self.config.distinguish_modifier_sides
+    )
     if canonical_key != key:
       logging.debug(
           f'remapped key {key_to_str(key)} -> {key_to_str(canonical_key)}'
@@ -841,8 +886,10 @@ class KeyLoggerApp:
         f'sqlite={"on" if self.config.send_logs_to_sqlite else "off"}, '
         f'full_events={"on" if self.config.send_all_events_to_sqlite else "off"}, '
         f'file={"on" if self.config.send_logs_to_file else "off"}, '
+        f'file_timestamps={"on" if self.config.timestamp_file_logs else "off"}, '
         f'debug={"on" if self.config.debug else "off"}, '
         f'physical_keys={"on" if self.config.log_physical_keys else "off"}, '
+        f'modifier_sides={"on" if self.config.distinguish_modifier_sides else "off"}, '
         f'stdout={"on" if self.config.echo_keys_to_stdout else "off"}, '
         f'wal={"on" if self.config.enable_sqlite_wal else "off"}'
     )
