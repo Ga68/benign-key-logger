@@ -37,7 +37,7 @@ DEFAULT_SEND_LOGS_TO_FILE = False
 DEFAULT_ECHO_KEYS_TO_STDOUT = False
 DEFAULT_DEBUG = False
 DEFAULT_LOG_PHYSICAL_KEYS = False
-DEFAULT_TIMESTAMP_FILE_LOGS = False
+DEFAULT_TIMESTAMP_FILE_LOGS = True
 DEFAULT_DISTINGUISH_MODIFIER_SIDES = False
 
 DEFAULT_LOG_FILE_NAME = 'key_log.txt'
@@ -273,6 +273,12 @@ def build_parser():
       help='prepend UTC timestamps to plaintext log file entries'
   )
   parser.add_argument(
+      '--no-file-timestamps',
+      dest='file_timestamps',
+      action='store_false',
+      help='write plaintext log file entries without timestamps'
+  )
+  parser.add_argument(
       '--physical-keys',
       action='store_true',
       help='log the physical key plus modifiers instead of the resulting character'
@@ -318,6 +324,7 @@ def build_parser():
       send_logs_to_sqlite=DEFAULT_SEND_LOGS_TO_SQLITE,
       send_logs_to_file=DEFAULT_SEND_LOGS_TO_FILE,
       send_all_events_to_sqlite=DEFAULT_SEND_ALL_EVENTS_TO_SQLITE,
+      file_timestamps=DEFAULT_TIMESTAMP_FILE_LOGS,
       enable_sqlite_wal=DEFAULT_ENABLE_SQLITE_WAL,
   )
   return parser

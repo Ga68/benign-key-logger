@@ -47,7 +47,7 @@ If you want better behavior while inspecting the database at the same time the l
 
 By default the logger records the resulting character or combo, so `Shift+a` is logged as `A`. If you would rather log the physical key plus modifiers, use `--physical-keys`. In that mode, `Shift+a` is logged as `<shift> + a`, and similarly `Shift+1` is logged as `<shift> + 1`.
 
-By default the plaintext file log writes just the key entry per line. If you want the text log to stand on its own for later timing analysis, you can add `--file-timestamps` to prepend a UTC ISO timestamp to each plaintext entry.
+By default the plaintext file log prepends a UTC ISO timestamp to each entry. If you want the old simpler plaintext format, use `--no-file-timestamps`.
 
 By default left and right modifiers are still remapped together in the log (`<shift_l>` and `<shift_r>` both become `<shift>`, and similarly for Control, Alt, and Command). If you want to preserve those distinctions, use `--modifier-sides`.
 
@@ -86,7 +86,8 @@ Some common examples:
 - Preserve left/right modifier distinctions: `python3 key_logger.py --modifier-sides`
 - Inspect the logger's internal behavior without echoing captured keys: `python3 key_logger.py --debug`
 - SQLite plus plaintext log file: `python3 key_logger.py --file`
-- Plaintext file with timestamps: `python3 key_logger.py --file --file-timestamps`
+- Plaintext file with timestamps: `python3 key_logger.py --file`
+- Plaintext file without timestamps: `python3 key_logger.py --file --no-file-timestamps`
 - Plaintext file only: `python3 key_logger.py --no-sqlite --file`
 - SQLite with the verbose full event table: `python3 key_logger.py --full-events`
 - SQLite with WAL enabled for concurrent inspection: `python3 key_logger.py --wal`
@@ -112,7 +113,7 @@ If you want a quick trust checklist before running it, here are the main things 
 - Stdout echo is off by default: keystrokes are only printed to the terminal if you pass `--stdout`.
 - SQLite is on by default: the main log goes to a local SQLite file unless you disable it with `--no-sqlite`.
 - Plaintext file logging is off by default: the text log is only enabled with `--file`.
-- Plaintext timestamps are opt-in: `--file-timestamps` prepends UTC timestamps to the plaintext file log.
+- Plaintext timestamps are on by default: `--no-file-timestamps` reverts the plaintext file log to bare key entries.
 - Output files are owner-only: the logger creates or tightens log files to `0600`, including SQLite sidecar files when present.
 - Full event capture is opt-in: `--full-events` enables the more verbose key up/down table in SQLite.
 - WAL is opt-in: `--wal` enables SQLite write-ahead logging for concurrent inspection.
