@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LaunchAgent template for benign-key-logger.
+
+  This is a TEMPLATE, not the file launchd loads. The placeholder tokens are
+  filled in with absolute paths by launchd/install.sh, which writes the result to
+  ~/Library/LaunchAgents/<Label>.plist. Edit THIS file (then re-run install.sh)
+  to change how the background logger runs; do not hand-edit the installed copy.
+
+  This is a user LaunchAgent (it lives in ~/Library/LaunchAgents and loads into
+  the gui/<uid> domain), NOT a LaunchDaemon. That is deliberate: a daemon runs
+  outside your logged-in GUI session and would capture no keyboard events.
+
+  It runs key_logger.py with the privacy-preserving defaults (aggregate counts
+  only -- no --stdout, no --raw-events, no --trigrams), so the background run is
+  exactly as benign as a normal foreground run.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+
+  <!-- Absolute paths: launchd runs with cwd=/, so the DB path MUST be absolute
+       or it would be written to /key_log.sqlite. WorkingDirectory below is a
+       belt-and-suspenders backup for the same reason. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>__SCRIPT__</string>
+    <string>--sqlite-file</string>
+    <string>__DB__</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__WORKDIR__</string>
+
+  <!-- Start automatically at login. -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart only on an abnormal exit, not on a clean logout/shutdown.
+       NOTE: this does NOT rescue the "no Input Monitoring permission" case --
+       pynput keeps running and simply receives zero events, which is not a
+       crash. Confirm capture by checking that the database grows. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>Crashed</key>
+    <true/>
+  </dict>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <!-- Flush the startup summary promptly so the log below is useful. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+
+  <!-- Operational status only (the effective-config summary and "starting to
+       listen" line, which the script logs to stderr). Captured keystrokes are
+       NOT echoed here -- stdout echo is off by default. -->
+  <key>StandardOutPath</key>
+  <string>__STDOUT_LOG__</string>
+  <key>StandardErrorPath</key>
+  <string>__STDERR_LOG__</string>
+</dict>
+</plist>

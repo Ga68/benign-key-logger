@@ -112,6 +112,51 @@ Some common examples:
 
 You could add execution permissions to the file (`chmod +x key_logger.py`) and then run it like a script (`./key_logger.py`), since it does have the Python shebang at the top; however, in the spirit of being *benign*, I don't like the idea of making the file executable, even though I know it's not an EXE, but ¯\\\_(ツ)\_/¯.
 
+### Running automatically at login (macOS LaunchAgent)
+
+If you want the logger to start by itself every time you log in — handy for building up usage stats over weeks without remembering to launch it — there is a ready-made macOS LaunchAgent in the `launchd/` folder. It runs the exact same script with the exact same privacy-preserving defaults (aggregate counts only — no stdout echo, no raw per-keystroke rows, no trigrams), so leaving it running is no more revealing than a normal foreground run.
+
+A few things are worth understanding before you install it:
+
+- **It's a LaunchAgent, not a LaunchDaemon.** It loads into your logged-in GUI session (`gui/<uid>`). A daemon runs outside your session and would capture nothing, so this is deliberate.
+- **You must grant keyboard access to the Python interpreter itself.** When `launchd` starts the script there is no Terminal in the picture, so any Accessibility/Input Monitoring permission you granted to Terminal does **not** carry over, and macOS will **not** pop up a prompt. You add the interpreter manually (the installer prints the exact path). Grant it **Input Monitoring**, and if events still don't show up, also add it to **Accessibility**.
+- **Without that permission it fails silently.** `pynput` keeps running but receives zero events — it does not error or crash — so the only reliable way to confirm it works is to check that the database is growing.
+
+To install and load it:
+
+```sh
+sh launchd/install.sh
+```
+
+That script fills the absolute paths into `launchd/local.benign-key-logger.plist.template`, writes the result to `~/Library/LaunchAgents/local.benign-key-logger.plist`, validates it with `plutil -lint`, and loads it with `launchctl bootstrap`. The database goes to `key_log.sqlite` in this repo folder and operational logs to `~/Library/Logs/benign-key-logger/`. It does not modify `key_logger.py` and does not change any permissions for you. (If your interpreter isn't at the default conda path, run it as `PYTHON_OVERRIDE=/path/to/python sh launchd/install.sh`.)
+
+**What you'll need to set for your own machine.** The installer auto-detects the repo location and writes the database and logs relative to it, so the only thing most people must supply is the **Python interpreter that has `pynput` installed**. It defaults to `$HOME/opt/miniconda3/envs/keylogger/bin/python`; if yours is elsewhere, pass it explicitly with `PYTHON_OVERRIDE=/path/to/your/python sh launchd/install.sh`, and the installer prints the exact resolved binary path you must grant in the next step. To use a different agent name, change the `LABEL` near the top of `launchd/install.sh` and `launchd/uninstall.sh` and rename `launchd/<label>.plist.template` to match.
+
+Then grant the permission the installer printed, e.g.:
+
+> System Settings → Privacy & Security → **Input Monitoring** → **+** → Cmd+Shift+G → paste the interpreter path that `install.sh` printed (e.g. `/Users/<your-username>/miniconda3/envs/keylogger/bin/python3.11`) → enable the toggle.
+
+To confirm it's actually capturing:
+
+```sh
+launchctl print "gui/$(id -u)/local.benign-key-logger"   # shows state and last exit status
+tail -n 20 ~/Library/Logs/benign-key-logger/launchd.err.log       # expect "starting to listen for keyboard events"
+sqlite3 key_log.sqlite "SELECT COALESCE(SUM(count),0) FROM key_counts_agg;"   # type a bit; this should rise
+```
+
+To stop and remove it:
+
+```sh
+sh launchd/uninstall.sh
+```
+
+That unloads the agent and deletes the installed plist; it leaves your captured data alone and does not touch System Settings (revoke the interpreter's Input Monitoring grant yourself if you want a clean slate).
+
+Two caveats:
+
+- **Changing how it runs:** edit `launchd/local.benign-key-logger.plist.template` (for example to add a flag such as `--bucket-minutes 30`) and re-run `sh launchd/install.sh`; it re-installs in place.
+- **Rebuilding the conda env may break the grant.** macOS ties the permission to the resolved real binary (`.../bin/python3.11`); if you recreate the `keylogger` env, that binary changes and you'll have to grant Input Monitoring once more. (For a rock-stable identity you could wrap the script in a small signed `.app` bundle, but for a single user the one-time re-grant is simpler.)
+
 ### Local Data Safety
 
 This tool does not send your data anywhere, but the files it writes are still sensitive and should remain owner-only on disk. The program enforces that automatically for the files it creates and warns when it has to tighten existing permissions, which helps reduce local disclosure risk on shared machines or under a permissive `umask`. The default aggregate-count storage further reduces sensitivity by never recording your exact keystroke sequence — but note that the opt-in `--raw-events` and `--file` modes *do* record exact sequences, so treat those outputs with extra care.
@@ -136,6 +181,9 @@ If you want a quick trust checklist before running it, here are the main things 
 - Full event capture is opt-in: `--full-events` enables the more verbose key up/down table in SQLite.
 - WAL is opt-in: `--wal` enables SQLite write-ahead logging for concurrent inspection.
 - Password handling depends on the OS: on macOS, secure input mode usually suppresses logging in password fields, but that behavior is provided by the OS, not by custom filtering in this script.
+- Auto-start is opt-in and self-contained: the `launchd/` LaunchAgent only runs if you install it with `sh launchd/install.sh`. It runs the same script with the same default counts-only settings, adds no flag that records exact sequences, and is removed with `sh launchd/uninstall.sh`.
+- The launch tooling is plain text you can read: `launchd/local.benign-key-logger.plist.template` and the install/uninstall scripts contain no network calls and write only to `~/Library/LaunchAgents/`, the repo's `key_log.sqlite`, and `~/Library/Logs/benign-key-logger/`.
+- The logger itself is unchanged by auto-start: no `launchctl`/`subprocess` was added to `key_logger.py`; all launch tooling lives in `launchd/`.
 
 ## Screenshots
 
