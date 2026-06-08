@@ -30,18 +30,28 @@ I use this on my Mac, running on Python3 (3.8.1, but I presume any Python3 versi
 
 ### Output Storage
 
-There are two ways to store the output (the key log). In both cases, it's put in a single file in the same directory you're running the script.
+The output goes into a single file in the directory you run the script from. [SQLite](https://sqlite.org/index.html) is the default, and by default it stores **aggregate counts**, not your exact keystrokes.
 
-1. Put every key stroke into a text file, one entry per line
-2. Put every key stroke into a [SQLite](https://sqlite.org/index.html) database
+1. **Aggregate counts in SQLite (default).** Keystrokes are tallied into time buckets (10 minutes by default, `--bucket-minutes` to change). The database keeps one row per `(bucket, key)` and per `(bucket, key1, key2)` bigram, incremented in place. Because only per-bucket counts are stored, the exact sequence you typed — passwords included — is never written to disk and can't be read back out.
+2. **Exact per-keystroke rows in SQLite (opt-in, `--raw-events`).** Restores the old behavior of one row per keystroke, with a precise timestamp, in a `key_log` table. This *does* preserve the exact typed order, so it's off by default; only turn it on if you understand and want that.
+3. **Plaintext text file (opt-in, `--file`).** One entry per line, also the exact sequence. Off by default.
 
-[SQLite](https://sqlite.org/index.html) is the default option. You can swap that or turn both on if you wish. The main storage options are exposed through the command line now instead of requiring you to edit the script.
+You can combine these. The storage options are all exposed through the command line.
+
+#### Why aggregate counts are the default
+
+Rounding timestamps alone would *not* protect you: as long as one row per keystroke exists, the exact sequence is recoverable from the rows' insertion order regardless of the timestamp. The real protection is collapsing keystrokes into counts so the ordering is gone. The aggregate tables are deliberately declared `WITHOUT ROWID`, so they don't even keep SQLite's implicit insertion-order `rowid` — rows live only in sorted key order, leaving counts as the only information present. Two caveats worth knowing:
+
+- **Bigrams** (counted live at capture time, since they can no longer be reconstructed from stored rows) re-introduce adjacency information. For a short secret typed in an otherwise-quiet bucket, bigram counts can partially reconstruct it; in busy/mixed buckets that signal drowns out. To limit this, bigram chains are broken across pauses (more than a couple of seconds) and across bucket boundaries, and **trigrams are off by default** (`--trigrams` to enable — they leak noticeably more).
+- macOS Secure Input Mode already suppresses logging in proper password fields (login, `sudo`, Keychain, most browser password boxes), but not secrets typed into ordinary visible fields, editors, or apps that don't trigger it. Aggregation is what protects the cases Secure Input misses.
+
+A side benefit: aggregation bounds how large the database gets, which matters if you leave the logger running continuously.
 
 Because the output contains sensitive data, the logger now creates its log files with owner-only permissions (`0600`) and will tighten existing log files if they are more permissive. That applies to the text log, the main SQLite file, and the common SQLite sidecar files (`-journal`, `-wal`, and `-shm`) if they exist.
 
-I chose [SQLite](https://sqlite.org/index.html) because the output is a single file that you can delete anytime you want, and it doesn't require any separate database engine. If you're not familiar with it, it's much like putting your data in a text file, one entry per line, but it does so in a structured way that, when you use a program that knows how to read that structure, gives you the power of SQL. The nice thing is that 100% of the data, meta data, etc. is in that one file. And having the entries in a database, does provide some advantages (if you know SQL) when you want to answer questions like "Show me the keys I press in descending order, by frequency?" or "What percentage of key strokes is the space bar?" You can even do some fun stuff like "How fast do I type?" (since timestamps are maintained in the SQLite log), "Do I type more during odd or even hours of the day?", and other, life changing questions-and-answers. A basic version of this is built into the SQLite output file, in the form of predefined views.
+I chose [SQLite](https://sqlite.org/index.html) because the output is a single file that you can delete anytime you want, and it doesn't require any separate database engine. If you're not familiar with it, it's much like putting your data in a text file, but it does so in a structured way that, when you use a program that knows how to read that structure, gives you the power of SQL. The nice thing is that 100% of the data is in that one file. Having the counts in a database makes it easy (if you know SQL) to answer questions like "Show me the keys I press in descending order, by frequency?" or "What percentage of key strokes is the space bar?" The predefined `key_counts` and `bigram_counts` views (and `trigram_counts` with `--trigrams`) summarize exactly this, reading from the aggregate tables. Because the default tables hold only per-bucket counts, questions that need exact per-keystroke timing — like "How fast do I type?" — require the opt-in `--raw-events` mode; coarse time-of-day questions still work off the 10-minute `bucket_utc`.
 
-To avoid paying the full SQLite commit cost on every single keystroke, the logger batches writes and commits them every 50 events or every 5 seconds, whichever comes first, and then performs a final flush on clean shutdown. The event threshold is chosen to be roughly consistent with a fast typist around 100 WPM.
+To avoid paying the full SQLite commit cost on every single keystroke, the logger batches writes and commits them every 50 events or every 5 seconds, whichever comes first, and then performs a final flush on clean shutdown. (In the default count mode a single keystroke issues more than one write — the unigram plus, when applicable, a bigram — so commits happen a little more often than one-per-keystroke would suggest.)
 
 If you want better behavior while inspecting the database at the same time the logger is writing to it, there is also a `--wal` option. It is off by default to keep the file model as simple as possible. If you turn it on, SQLite uses write-ahead logging, which can improve read/write concurrency, but it also means you should expect sidecar files like `-wal` and `-shm` to appear while the database is active.
 
@@ -81,7 +91,11 @@ The help output shows the current defaults, and the program prints a short start
 
 Some common examples:
 
-- Default SQLite logging: `python3 key_logger.py`
+- Default aggregate-count logging (10-minute buckets): `python3 key_logger.py`
+- Aggregate counts with a different bucket size: `python3 key_logger.py --bucket-minutes 30`
+- Also aggregate trigrams (higher reconstruction risk): `python3 key_logger.py --trigrams`
+- Also store exact per-keystroke rows (less private): `python3 key_logger.py --raw-events`
+- Old behavior, exact rows only with no count tables: `python3 key_logger.py --no-counts --raw-events`
 - Physical key logging instead of resulting characters: `python3 key_logger.py --physical-keys`
 - Preserve left/right modifier distinctions: `python3 key_logger.py --modifier-sides`
 - Inspect the logger's internal behavior without echoing captured keys: `python3 key_logger.py --debug`
@@ -100,7 +114,7 @@ You could add execution permissions to the file (`chmod +x key_logger.py`) and t
 
 ### Local Data Safety
 
-This tool does not send your data anywhere, but the files it writes are still sensitive. They contain raw keystrokes and should remain owner-only on disk. The program now enforces that automatically for the files it creates and warns when it has to tighten existing permissions, which helps reduce local disclosure risk on shared machines or under a permissive `umask`.
+This tool does not send your data anywhere, but the files it writes are still sensitive and should remain owner-only on disk. The program enforces that automatically for the files it creates and warns when it has to tighten existing permissions, which helps reduce local disclosure risk on shared machines or under a permissive `umask`. The default aggregate-count storage further reduces sensitivity by never recording your exact keystroke sequence — but note that the opt-in `--raw-events` and `--file` modes *do* record exact sequences, so treat those outputs with extra care.
 
 ### Audit Checklist
 
@@ -111,7 +125,11 @@ If you want a quick trust checklist before running it, here are the main things 
 - Physical key logging is opt-in: `--physical-keys` switches from logging the resulting character to logging the physical key plus modifiers.
 - Left/right modifier distinction is opt-in: `--modifier-sides` keeps modifier sides separate instead of remapping them together.
 - Stdout echo is off by default: keystrokes are only printed to the terminal if you pass `--stdout`.
-- SQLite is on by default: the main log goes to a local SQLite file unless you disable it with `--no-sqlite`.
+- SQLite is on by default: the database is used unless you disable it with `--no-sqlite` (the master switch for all database sinks).
+- Aggregate counts are the default sink: keystrokes are stored as per-bucket counts, not exact sequences, so passwords can't be read back out. Disable with `--no-counts`.
+- Exact per-keystroke logging is opt-in: `--raw-events` restores one-row-per-keystroke storage (the less-private mode); it is off by default.
+- Trigram aggregation is opt-in: `--trigrams` enables trigram counts, which leak more ordering than bigrams; off by default.
+- Bucket size is configurable: `--bucket-minutes` (default 10) controls how coarsely keystroke times are grouped.
 - Plaintext file logging is off by default: the text log is only enabled with `--file`.
 - Plaintext timestamps are on by default: `--no-file-timestamps` reverts the plaintext file log to bare key entries.
 - Output files are owner-only: the logger creates or tightens log files to `0600`, including SQLite sidecar files when present.
