@@ -779,6 +779,26 @@ class KeyLoggerApp:
       """)
       logging.debug('SQLite full_key_log table created')
 
+  def warn_if_legacy_key_log_table(self):
+    # A pre-existing key_log table holds exact per-keystroke rows from an older
+    # run. In counts-only mode it is neither migrated nor read by the views, so
+    # it just stays in the file and keeps that history reconstructable -- the
+    # privacy default doesn't cover data written before the switch. Warn so the
+    # user can drop it. (With --raw-events the table is intentional, not legacy.)
+    if (not self.config.send_counts_to_sqlite
+        or self.config.send_raw_events_to_sqlite):
+      return
+    self.db_cursor.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='key_log'"
+    )
+    if self.db_cursor.fetchone() is not None:
+      logging.warning(
+          f"legacy 'key_log' table with exact keystrokes found in "
+          f'{self.config.sqlite_file_name}; it is not migrated and stays on '
+          f'disk. Run "DROP TABLE key_log;" against the file to remove that '
+          f'history.'
+      )
+
   def create_sqlite_views(self):
     # The convenience views summarize the aggregate count tables. Without
     # counts there's nothing for them to read, so skip them in raw-only mode.
@@ -843,6 +863,7 @@ class KeyLoggerApp:
       )
     self.prepare_sqlite_file()
     self.open_sqlite_connection()
+    self.warn_if_legacy_key_log_table()
     self.configure_sqlite_journal_mode()
     self.create_sqlite_tables()
     self.create_sqlite_views()
