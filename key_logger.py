@@ -779,24 +779,40 @@ class KeyLoggerApp:
       """)
       logging.debug('SQLite full_key_log table created')
 
-  def warn_if_legacy_key_log_table(self):
-    # A pre-existing key_log table holds exact per-keystroke rows from an older
-    # run. In counts-only mode it is neither migrated nor read by the views, so
-    # it just stays in the file and keeps that history reconstructable -- the
-    # privacy default doesn't cover data written before the switch. Warn so the
-    # user can drop it. (With --raw-events the table is intentional, not legacy.)
-    if (not self.config.send_counts_to_sqlite
-        or self.config.send_raw_events_to_sqlite):
-      return
+  def sqlite_table_exists(self, name):
+    # Parameterized existence check so a table name is never spliced into SQL.
     self.db_cursor.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='key_log'"
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
     )
-    if self.db_cursor.fetchone() is not None:
+    return self.db_cursor.fetchone() is not None
+
+  def warn_about_legacy_sensitive_tables(self):
+    # Some sink tables hold history the current run neither writes nor protects:
+    # key_log (exact per-keystroke rows), full_key_log (exact up/down events +
+    # timestamps), and trigram_counts_agg (higher reconstruction risk than the
+    # default bigrams). When the matching opt-in flag is OFF, such a table is
+    # leftover from an older run -- not migrated, not read by the views, just
+    # sitting in the file and keeping that history reconstructable. The privacy
+    # default doesn't cover data written before the switch, so warn and point at
+    # the DROP. When the flag is ON the table is intentional this run, so skip
+    # it. Each table is gated only on its own flag (NOT on counts mode), so a
+    # leftover full_key_log/trigram table is still flagged under, e.g.,
+    # --no-counts --raw-events.
+    legacy_tables = (
+        ('key_log', self.config.send_raw_events_to_sqlite,
+         'exact per-keystroke rows; the exact typed sequence is recoverable'),
+        ('full_key_log', self.config.send_all_events_to_sqlite,
+         'exact key up/down events with timestamps'),
+        ('trigram_counts_agg', self.config.send_trigram_counts,
+         'trigram counts, a higher reconstruction risk than the default bigrams'),
+    )
+    for name, intentional, what_it_leaks in legacy_tables:
+      if intentional or not self.sqlite_table_exists(name):
+        continue
       logging.warning(
-          f"legacy 'key_log' table with exact keystrokes found in "
+          f"legacy '{name}' table ({what_it_leaks}) found in "
           f'{self.config.sqlite_file_name}; it is not migrated and stays on '
-          f'disk. Run "DROP TABLE key_log;" against the file to remove that '
-          f'history.'
+          f'disk. Run "DROP TABLE {name};" against the file to remove it.'
       )
 
   def create_sqlite_views(self):
@@ -863,7 +879,7 @@ class KeyLoggerApp:
       )
     self.prepare_sqlite_file()
     self.open_sqlite_connection()
-    self.warn_if_legacy_key_log_table()
+    self.warn_about_legacy_sensitive_tables()
     self.configure_sqlite_journal_mode()
     self.create_sqlite_tables()
     self.create_sqlite_views()

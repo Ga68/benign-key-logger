@@ -179,6 +179,7 @@ If you want a quick trust checklist before running it, here are the main things 
 - Plaintext timestamps are on by default: `--no-file-timestamps` reverts the plaintext file log to bare key entries.
 - Output files are owner-only: the logger creates or tightens log files to `0600`, including SQLite sidecar files when present.
 - Full event capture is opt-in: `--full-events` enables the more verbose key up/down table in SQLite.
+- Leftover sensitive tables are flagged, not silently kept: on startup the logger warns if the database still holds a `key_log`, `full_key_log`, or `trigram_counts_agg` table that the current run isn't writing (e.g. left behind by an earlier `--raw-events`/`--full-events`/`--trigrams` run). It never migrates or deletes that data for you — the warning prints the exact `DROP TABLE …;` to remove it yourself.
 - WAL is opt-in: `--wal` enables SQLite write-ahead logging for concurrent inspection.
 - Password handling depends on the OS: on macOS, secure input mode usually suppresses logging in password fields, but that behavior is provided by the OS, not by custom filtering in this script.
 - Auto-start is opt-in and self-contained: the `launchd/` LaunchAgent only runs if you install it with `sh launchd/install.sh`. It runs the same script with the same default counts-only settings, adds no flag that records exact sequences, and is removed with `sh launchd/uninstall.sh`.
