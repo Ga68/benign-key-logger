@@ -22,7 +22,7 @@ import sqlite3
 import stat
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pynput.keyboard import Key, KeyCode, Listener
 
@@ -31,7 +31,13 @@ from pynput.keyboard import Key, KeyCode, Listener
 # ######### User Settings ##########
 # ######### #### ######## ##########
 
+# SQLite is the master switch for using the database at all. Beneath it,
+# the aggregate count tables (the private default), the exact per-keystroke
+# `key_log` table, and the full up/down event log are independent sinks.
 DEFAULT_SEND_LOGS_TO_SQLITE = True
+DEFAULT_SEND_COUNTS_TO_SQLITE = True
+DEFAULT_SEND_RAW_EVENTS_TO_SQLITE = False
+DEFAULT_SEND_TRIGRAM_COUNTS = False
 DEFAULT_SEND_ALL_EVENTS_TO_SQLITE = False
 DEFAULT_SEND_LOGS_TO_FILE = False
 DEFAULT_ECHO_KEYS_TO_STDOUT = False
@@ -40,6 +46,11 @@ DEFAULT_LOG_PHYSICAL_KEYS = False
 DEFAULT_TIMESTAMP_FILE_LOGS = True
 DEFAULT_DISTINGUISH_MODIFIER_SIDES = False
 
+# Keystrokes are aggregated into counts grouped by this many minutes, so the
+# exact typed sequence (passwords included) is never stored, only per-bucket
+# tallies. See bucket_label() and the long comment in log().
+DEFAULT_BUCKET_MINUTES = 10
+
 DEFAULT_LOG_FILE_NAME = 'key_log.txt'
 DEFAULT_SQLITE_FILE_NAME = 'key_log.sqlite'
 DEFAULT_ENABLE_SQLITE_WAL = False
@@ -47,6 +58,14 @@ DEFAULT_ENABLE_SQLITE_WAL = False
 OWNER_ONLY_FILE_MODE = 0o600
 SQLITE_COMMIT_EVERY_N_EVENTS = 50
 SQLITE_COMMIT_EVERY_SECONDS = 5.0
+
+# A bigram is only counted when two keys are pressed within this many seconds
+# of each other; a longer pause breaks the chain so unrelated typing sessions
+# aren't stitched into spurious adjacency data.
+BIGRAM_IDLE_RESET_SECONDS = 2.0
+
+# UPSERT (INSERT ... ON CONFLICT ... DO UPDATE) requires SQLite 3.24+ (2018).
+MINIMUM_SQLITE_VERSION_FOR_UPSERT = (3, 24, 0)
 
 # ######### ####### ##### ##########
 # ######### Logging Setup ##########
@@ -120,13 +139,77 @@ SHIFTED_KEY_EQUIVALENTS = {
     '/': '?',
 }
 
+# Aggregate count tables. Each holds per-bucket tallies rather than one row
+# per keystroke, so the exact typed sequence is never recoverable. The
+# composite PRIMARY KEY is the conflict target the UPSERTs below increment.
+#
+# WITHOUT ROWID is load-bearing for privacy, not an optimization: an ordinary
+# table keeps an implicit rowid in INSERTION order, so reading the rows in
+# rowid order would replay the order keys/bigrams were first seen in a bucket
+# (the bigram rows alone trivially reconstruct a quiet-bucket password). A
+# WITHOUT ROWID table has no such column; rows live only in PRIMARY KEY
+# (lexicographic) order, which reveals nothing about typing order. Counts are
+# all that remain.
+KEY_COUNTS_AGG_TABLE_SQL = """
+  CREATE TABLE IF NOT EXISTS key_counts_agg (
+    bucket_utc TEXT NOT NULL,
+    key_code TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    PRIMARY KEY (bucket_utc, key_code)
+  ) WITHOUT ROWID
+"""
+
+BIGRAM_COUNTS_AGG_TABLE_SQL = """
+  CREATE TABLE IF NOT EXISTS bigram_counts_agg (
+    bucket_utc TEXT NOT NULL,
+    key1 TEXT NOT NULL,
+    key2 TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    PRIMARY KEY (bucket_utc, key1, key2)
+  ) WITHOUT ROWID
+"""
+
+TRIGRAM_COUNTS_AGG_TABLE_SQL = """
+  CREATE TABLE IF NOT EXISTS trigram_counts_agg (
+    bucket_utc TEXT NOT NULL,
+    key1 TEXT NOT NULL,
+    key2 TEXT NOT NULL,
+    key3 TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    PRIMARY KEY (bucket_utc, key1, key2, key3)
+  ) WITHOUT ROWID
+"""
+
+INSERT_KEY_COUNT_SQL = (
+    'INSERT INTO key_counts_agg (bucket_utc, key_code, count) VALUES (?, ?, 1) '
+    'ON CONFLICT(bucket_utc, key_code) DO UPDATE SET count = count + 1'
+)
+
+INSERT_BIGRAM_COUNT_SQL = (
+    'INSERT INTO bigram_counts_agg (bucket_utc, key1, key2, count) '
+    'VALUES (?, ?, ?, 1) '
+    'ON CONFLICT(bucket_utc, key1, key2) DO UPDATE SET count = count + 1'
+)
+
+INSERT_TRIGRAM_COUNT_SQL = (
+    'INSERT INTO trigram_counts_agg (bucket_utc, key1, key2, key3, count) '
+    'VALUES (?, ?, ?, ?, 1) '
+    'ON CONFLICT(bucket_utc, key1, key2, key3) DO UPDATE SET count = count + 1'
+)
+
+# The views below summarize the aggregate tables across all buckets. They keep
+# the same output columns (count, frequency, cumulative_frequency) the old
+# key_log-based views had, so existing analysis queries keep working. Combo
+# filtering (the old `NOT LIKE '%+%'`) now happens at capture time, so it isn't
+# repeated here.
 KEY_COUNTS_VIEW_SQL = """
   CREATE VIEW IF NOT EXISTS key_counts AS
   WITH frequencies AS (
-      SELECT key_code, count(*) AS count,
-          (count(*) * 1.0) / (SELECT count(*) FROM key_log) AS frequency
-      FROM key_log
-      GROUP BY 1
+      SELECT key_code, SUM(count) AS count,
+          (SUM(count) * 1.0) / (SELECT SUM(count) FROM key_counts_agg)
+              AS frequency
+      FROM key_counts_agg
+      GROUP BY key_code
   )
   SELECT *, SUM(frequency) OVER (
       ORDER BY frequency DESC ROWS UNBOUNDED PRECEDING
@@ -137,79 +220,48 @@ KEY_COUNTS_VIEW_SQL = """
 
 BIGRAM_COUNTS_VIEW_SQL = """
   CREATE VIEW IF NOT EXISTS bigram_counts AS
-  WITH raw_bigram_data AS
-  (
-    SELECT key_code, lag(key_code) OVER (ORDER BY time_utc) AS key_code_lag_1
-    FROM key_log
+  WITH bigram_totals AS (
+      SELECT key1 || ' ' || key2 AS bigram, SUM(count) AS count
+      FROM bigram_counts_agg
+      GROUP BY key1, key2
   )
-  , bigram_counts AS
-  (
-    SELECT key_code_lag_1 || ' ' || key_code AS bigram, count(*) AS count
-    FROM raw_bigram_data
-    WHERE true
-      AND key_code IS NOT NULL
-      AND key_code_lag_1 IS NOT NULL
-      AND key_code NOT LIKE '%+%'
-      AND key_code_lag_1 NOT LIKE '%+%'
-    GROUP BY 1
-  )
-  , bigram_frequencies AS
-  (
-    SELECT *,
-      (1.0* count ) / (SELECT sum(count) FROM bigram_counts) AS frequency
-    FROM bigram_counts
+  , bigram_frequencies AS (
+      SELECT bigram, count,
+          (1.0 * count) / (SELECT SUM(count) FROM bigram_totals) AS frequency
+      FROM bigram_totals
   )
   SELECT *, SUM(frequency) OVER (
       ORDER BY frequency DESC ROWS UNBOUNDED PRECEDING
   ) AS cumulative_frequency
   FROM bigram_frequencies
-  GROUP BY bigram
   ORDER BY cumulative_frequency, count DESC, bigram
 """
 
 TRIGRAM_COUNTS_VIEW_SQL = """
   CREATE VIEW IF NOT EXISTS trigram_counts AS
-  WITH raw_trigram_data AS
-  (
-    SELECT
-      key_code,
-      lag(key_code) OVER (ORDER BY time_utc) AS key_code_lag_1,
-      lag(key_code, 2) OVER (ORDER BY time_utc) AS key_code_lag_2
-    FROM key_log
+  WITH trigram_totals AS (
+      SELECT key1 || ' ' || key2 || ' ' || key3 AS trigram, SUM(count) AS count
+      FROM trigram_counts_agg
+      GROUP BY key1, key2, key3
   )
-  , trigram_counts AS
-  (
-    SELECT
-      key_code_lag_2 || ' ' || key_code_lag_1 || ' ' || key_code AS trigram,
-      count(*) AS count
-    FROM raw_trigram_data
-    WHERE true
-      AND key_code IS NOT NULL
-      AND key_code_lag_1 IS NOT NULL
-      AND key_code_lag_2 IS NOT NULL
-      AND key_code NOT LIKE '%+%'
-      AND key_code_lag_1 NOT LIKE '%+%'
-      AND key_code_lag_2 NOT LIKE '%+%'
-    GROUP BY 1
-  )
-  , trigram_frequencies AS
-  (
-    SELECT *,
-      (1.0* count ) / (SELECT sum(count) FROM trigram_counts) AS frequency
-    FROM trigram_counts
+  , trigram_frequencies AS (
+      SELECT trigram, count,
+          (1.0 * count) / (SELECT SUM(count) FROM trigram_totals) AS frequency
+      FROM trigram_totals
   )
   SELECT *, SUM(frequency) OVER (
       ORDER BY frequency DESC ROWS UNBOUNDED PRECEDING
   ) AS cumulative_frequency
   FROM trigram_frequencies
-  GROUP BY trigram
   ORDER BY cumulative_frequency, count DESC, trigram
 """
 
 
 @dataclass
 class Config:
-  send_logs_to_sqlite: bool = DEFAULT_SEND_LOGS_TO_SQLITE
+  send_counts_to_sqlite: bool = DEFAULT_SEND_COUNTS_TO_SQLITE
+  send_raw_events_to_sqlite: bool = DEFAULT_SEND_RAW_EVENTS_TO_SQLITE
+  send_trigram_counts: bool = DEFAULT_SEND_TRIGRAM_COUNTS
   send_all_events_to_sqlite: bool = DEFAULT_SEND_ALL_EVENTS_TO_SQLITE
   send_logs_to_file: bool = DEFAULT_SEND_LOGS_TO_FILE
   timestamp_file_logs: bool = DEFAULT_TIMESTAMP_FILE_LOGS
@@ -220,6 +272,18 @@ class Config:
   log_file_name: str = DEFAULT_LOG_FILE_NAME
   sqlite_file_name: str = DEFAULT_SQLITE_FILE_NAME
   enable_sqlite_wal: bool = DEFAULT_ENABLE_SQLITE_WAL
+  bucket_interval_seconds: int = DEFAULT_BUCKET_MINUTES * 60
+
+  @property
+  def uses_sqlite(self):
+    # True when any SQLite-backed sink is on, so the database is opened and
+    # commits are flushed. The --sqlite/--no-sqlite master switch is resolved
+    # into these fields in parse_args().
+    return (
+        self.send_counts_to_sqlite
+        or self.send_raw_events_to_sqlite
+        or self.send_all_events_to_sqlite
+    )
 
 
 # `Config` holds the user-selected runtime settings derived from CLI flags.
@@ -235,13 +299,56 @@ def build_parser():
       '--sqlite',
       dest='send_logs_to_sqlite',
       action='store_true',
-      help='write the main key log to SQLite'
+      help='use the SQLite database (master switch for all DB sinks)'
   )
   parser.add_argument(
       '--no-sqlite',
       dest='send_logs_to_sqlite',
       action='store_false',
-      help='disable the main SQLite key log'
+      help='disable the SQLite database entirely'
+  )
+  parser.add_argument(
+      '--counts',
+      dest='send_counts_to_sqlite',
+      action='store_true',
+      help='write aggregate key/bigram counts bucketed by time (default: follows --sqlite)'
+  )
+  parser.add_argument(
+      '--no-counts',
+      dest='send_counts_to_sqlite',
+      action='store_false',
+      help='disable the aggregate count tables'
+  )
+  parser.add_argument(
+      '--raw-events',
+      dest='send_raw_events_to_sqlite',
+      action='store_true',
+      help='also store exact per-keystroke rows in key_log (less private; off by default)'
+  )
+  parser.add_argument(
+      '--no-raw-events',
+      dest='send_raw_events_to_sqlite',
+      action='store_false',
+      help='disable the exact per-keystroke key_log table'
+  )
+  parser.add_argument(
+      '--trigrams',
+      dest='send_trigram_counts',
+      action='store_true',
+      help='also aggregate trigram counts (off by default; increases reconstruction risk)'
+  )
+  parser.add_argument(
+      '--no-trigrams',
+      dest='send_trigram_counts',
+      action='store_false',
+      help='disable trigram aggregation'
+  )
+  parser.add_argument(
+      '--bucket-minutes',
+      dest='bucket_minutes',
+      type=int,
+      default=DEFAULT_BUCKET_MINUTES,
+      help='size in minutes of the aggregation time bucket'
   )
   parser.add_argument(
       '--file',
@@ -322,6 +429,10 @@ def build_parser():
   )
   parser.set_defaults(
       send_logs_to_sqlite=DEFAULT_SEND_LOGS_TO_SQLITE,
+      # None means "follow the --sqlite master switch"; resolved in parse_args.
+      send_counts_to_sqlite=None,
+      send_raw_events_to_sqlite=DEFAULT_SEND_RAW_EVENTS_TO_SQLITE,
+      send_trigram_counts=DEFAULT_SEND_TRIGRAM_COUNTS,
       send_logs_to_file=DEFAULT_SEND_LOGS_TO_FILE,
       send_all_events_to_sqlite=DEFAULT_SEND_ALL_EVENTS_TO_SQLITE,
       file_timestamps=DEFAULT_TIMESTAMP_FILE_LOGS,
@@ -334,11 +445,38 @@ def parse_args(argv=None):
   parser = build_parser()
   args = parser.parse_args(argv)
 
-  if args.send_all_events_to_sqlite and not args.send_logs_to_sqlite:
-    parser.error('--full-events requires SQLite logging; remove --no-sqlite')
+  # Counts default to following the --sqlite master switch unless the user
+  # explicitly passed --counts/--no-counts.
+  send_counts = args.send_counts_to_sqlite
+  if send_counts is None:
+    send_counts = args.send_logs_to_sqlite
+
+  if args.bucket_minutes <= 0:
+    parser.error('--bucket-minutes must be a positive integer')
+
+  db_sinks_on = (
+      send_counts
+      or args.send_raw_events_to_sqlite
+      or args.send_all_events_to_sqlite
+  )
+  if db_sinks_on and not args.send_logs_to_sqlite:
+    parser.error(
+        'count/raw-event/full-event logging requires SQLite; remove --no-sqlite'
+    )
+
+  if args.send_trigram_counts and not send_counts:
+    parser.error('--trigrams requires count aggregation; enable counts')
+
+  if not (db_sinks_on or args.send_logs_to_file or args.stdout):
+    parser.error(
+        'no output sink enabled; enable counts, --raw-events, --full-events, '
+        '--file, or --stdout'
+    )
 
   return Config(
-      send_logs_to_sqlite=args.send_logs_to_sqlite,
+      send_counts_to_sqlite=send_counts,
+      send_raw_events_to_sqlite=args.send_raw_events_to_sqlite,
+      send_trigram_counts=args.send_trigram_counts,
       send_all_events_to_sqlite=args.send_all_events_to_sqlite,
       send_logs_to_file=args.send_logs_to_file,
       timestamp_file_logs=args.file_timestamps,
@@ -349,6 +487,7 @@ def parse_args(argv=None):
       log_file_name=args.log_file,
       sqlite_file_name=args.sqlite_file,
       enable_sqlite_wal=args.enable_sqlite_wal,
+      bucket_interval_seconds=args.bucket_minutes * 60,
   )
 
 
@@ -464,6 +603,26 @@ def equivalent_shifted_keys(key):
   return equivalents
 
 
+def bucket_label(dt, interval_seconds=600):
+  """
+  Floor a UTC datetime down to the start of its time bucket and return it as
+  an ISO-8601 string. interval_seconds defaults to 600 (10 minutes).
+
+  Flooring (not rounding to the nearest boundary) means a bucket label is a
+  real timestamp marking the inclusive start of the window it covers, buckets
+  never overlap, and every event maps to exactly one bucket deterministically.
+  This is the grouping key the aggregate count tables use, so individual
+  keystroke timings are discarded — only per-bucket tallies remain.
+  """
+  epoch = int(dt.replace(tzinfo=timezone.utc).timestamp())
+  floored = epoch - (epoch % interval_seconds)
+  return (
+      datetime.fromtimestamp(floored, timezone.utc)
+      .replace(tzinfo=None)
+      .isoformat()
+  )
+
+
 class KeyLoggerApp:
   # `KeyLoggerApp` owns the mutable state and side effects of a single run.
   def __init__(self, config):
@@ -474,6 +633,13 @@ class KeyLoggerApp:
     self.db_connection = None
     self.db_cursor = None
     self._close_registered = False
+    # Capture-time n-gram chain. Bigrams/trigrams are formed from the last
+    # one/two logged "plain" entries, then stored as counts. The chain resets
+    # across modifier combos, long pauses, and bucket boundaries (see log()).
+    self.previous_logged_entry = None
+    self.previous_logged_monotonic = None
+    self.previous_logged_bucket = None
+    self.second_previous_logged_entry = None
 
   def get_file_mode(self, path):
     return stat.S_IMODE(os.stat(path).st_mode)
@@ -509,7 +675,7 @@ class KeyLoggerApp:
     return os.fdopen(fd, 'a')
 
   def commit_sqlite_if_needed(self, force=False):
-    if not self.config.send_logs_to_sqlite or self.pending_sqlite_writes == 0:
+    if not self.config.uses_sqlite or self.pending_sqlite_writes == 0:
       return
 
     elapsed_since_last_commit = (
@@ -591,11 +757,20 @@ class KeyLoggerApp:
     logging.info('SQLite WAL mode enabled')
 
   def create_sqlite_tables(self):
-    self.db_cursor.execute("""
-        CREATE TABLE IF NOT EXISTS key_log
-        (time_utc TEXT, key_code TEXT)
-    """)
-    logging.debug('SQLite key_log table created')
+    if self.config.send_counts_to_sqlite:
+      self.db_cursor.execute(KEY_COUNTS_AGG_TABLE_SQL)
+      self.db_cursor.execute(BIGRAM_COUNTS_AGG_TABLE_SQL)
+      logging.debug('SQLite key_counts_agg and bigram_counts_agg tables created')
+      if self.config.send_trigram_counts:
+        self.db_cursor.execute(TRIGRAM_COUNTS_AGG_TABLE_SQL)
+        logging.debug('SQLite trigram_counts_agg table created')
+
+    if self.config.send_raw_events_to_sqlite:
+      self.db_cursor.execute("""
+          CREATE TABLE IF NOT EXISTS key_log
+          (time_utc TEXT, key_code TEXT)
+      """)
+      logging.debug('SQLite key_log table created')
 
     if self.config.send_all_events_to_sqlite:
       self.db_cursor.execute("""
@@ -604,7 +779,48 @@ class KeyLoggerApp:
       """)
       logging.debug('SQLite full_key_log table created')
 
+  def sqlite_table_exists(self, name):
+    # Parameterized existence check so a table name is never spliced into SQL.
+    self.db_cursor.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    )
+    return self.db_cursor.fetchone() is not None
+
+  def warn_about_legacy_sensitive_tables(self):
+    # Some sink tables hold history the current run neither writes nor protects:
+    # key_log (exact per-keystroke rows), full_key_log (exact up/down events +
+    # timestamps), and trigram_counts_agg (higher reconstruction risk than the
+    # default bigrams). When the matching opt-in flag is OFF, such a table is
+    # leftover from an older run -- not migrated, not read by the views, just
+    # sitting in the file and keeping that history reconstructable. The privacy
+    # default doesn't cover data written before the switch, so warn and point at
+    # the DROP. When the flag is ON the table is intentional this run, so skip
+    # it. Each table is gated only on its own flag (NOT on counts mode), so a
+    # leftover full_key_log/trigram table is still flagged under, e.g.,
+    # --no-counts --raw-events.
+    legacy_tables = (
+        ('key_log', self.config.send_raw_events_to_sqlite,
+         'exact per-keystroke rows; the exact typed sequence is recoverable'),
+        ('full_key_log', self.config.send_all_events_to_sqlite,
+         'exact key up/down events with timestamps'),
+        ('trigram_counts_agg', self.config.send_trigram_counts,
+         'trigram counts, a higher reconstruction risk than the default bigrams'),
+    )
+    for name, intentional, what_it_leaks in legacy_tables:
+      if intentional or not self.sqlite_table_exists(name):
+        continue
+      logging.warning(
+          f"legacy '{name}' table ({what_it_leaks}) found in "
+          f'{self.config.sqlite_file_name}; it is not migrated and stays on '
+          f'disk. Run "DROP TABLE {name};" against the file to remove it.'
+      )
+
   def create_sqlite_views(self):
+    # The convenience views summarize the aggregate count tables. Without
+    # counts there's nothing for them to read, so skip them in raw-only mode.
+    if not self.config.send_counts_to_sqlite:
+      return
+
     self.db_cursor.execute('DROP VIEW IF EXISTS key_counts')
     self.db_cursor.execute(KEY_COUNTS_VIEW_SQL)
     logging.debug('SQLite key_counts view created')
@@ -613,9 +829,12 @@ class KeyLoggerApp:
     self.db_cursor.execute(BIGRAM_COUNTS_VIEW_SQL)
     logging.debug('SQLite bigram_counts view created')
 
+    # Always drop the trigram view so an old one doesn't dangle; recreate it
+    # only when trigram aggregation is enabled.
     self.db_cursor.execute('DROP VIEW IF EXISTS trigram_counts')
-    self.db_cursor.execute(TRIGRAM_COUNTS_VIEW_SQL)
-    logging.debug('SQLite trigram_counts view created')
+    if self.config.send_trigram_counts:
+      self.db_cursor.execute(TRIGRAM_COUNTS_VIEW_SQL)
+      logging.debug('SQLite trigram_counts view created')
 
   def finish_sqlite_setup(self):
     self.db_connection.commit()
@@ -642,13 +861,25 @@ class KeyLoggerApp:
     will be created, or (3) change the name of the file in the
     sqlite_file_name config value and a new one will be created.
 
-    There's a few views that are created, simply as a convenience, that
-    will list your usage by key, bi-gram, and tri-gram. The main table
-    keeps a single row for every key-stroke, which doesn't do much for the
-    ultimate goal of understanding your aggregate key usage.
+    By default the database stores only AGGREGATE COUNTS grouped into time
+    buckets (see DEFAULT_BUCKET_MINUTES and bucket_label): one row per
+    (bucket, key) and (bucket, key1, key2), incremented in place. The exact
+    typed sequence is never written, so passwords can't be read back out of
+    the file. The convenience views (key_counts, bigram_counts, and, with
+    --trigrams, trigram_counts) summarize those tallies for layout analysis.
+    Trigrams and the exact per-keystroke `key_log` table (--raw-events) are
+    opt-in and off by default because they leak more ordering information.
     """
+    if (self.config.send_counts_to_sqlite
+        and sqlite3.sqlite_version_info < MINIMUM_SQLITE_VERSION_FOR_UPSERT):
+      raise SystemExit(
+          f'SQLite {sqlite3.sqlite_version} is too old for count aggregation; '
+          'need >= 3.24.0 for UPSERT. Upgrade Python/SQLite, or run with '
+          '--no-counts --raw-events for the exact-sequence log instead.'
+      )
     self.prepare_sqlite_file()
     self.open_sqlite_connection()
+    self.warn_about_legacy_sensitive_tables()
     self.configure_sqlite_journal_mode()
     self.create_sqlite_tables()
     self.create_sqlite_views()
@@ -712,9 +943,15 @@ class KeyLoggerApp:
     if self.config.echo_keys_to_stdout:
       logging.info(f'key: {log_entry}')
 
-    timestamp_utc = datetime.utcnow().isoformat()
+    now_dt = datetime.now(timezone.utc)
+    timestamp_utc = now_dt.replace(tzinfo=None).isoformat()
 
-    if self.config.send_logs_to_sqlite:
+    if self.config.send_counts_to_sqlite:
+      bucket = bucket_label(now_dt, self.config.bucket_interval_seconds)
+      self.record_unigram_count(bucket, log_entry)
+      self.update_ngram_chain(bucket, log_entry, time.monotonic())
+
+    if self.config.send_raw_events_to_sqlite:
       row_values = (timestamp_utc, log_entry)
       self.db_cursor.execute(
           'INSERT INTO key_log VALUES (?, ?)',
@@ -731,10 +968,70 @@ class KeyLoggerApp:
         log_file.write(f'{file_entry}\n')
         logging.debug(f'logged to file: {log_entry}')
 
+  def record_unigram_count(self, bucket, key_str):
+    self.db_cursor.execute(INSERT_KEY_COUNT_SQL, (bucket, key_str))
+    self.note_pending_sqlite_write()
+
+  def record_bigram_count(self, bucket, key1, key2):
+    self.db_cursor.execute(INSERT_BIGRAM_COUNT_SQL, (bucket, key1, key2))
+    self.note_pending_sqlite_write()
+
+  def record_trigram_count(self, bucket, key1, key2, key3):
+    self.db_cursor.execute(INSERT_TRIGRAM_COUNT_SQL, (bucket, key1, key2, key3))
+    self.note_pending_sqlite_write()
+
+  def update_ngram_chain(self, bucket, log_entry, now_monotonic):
+    """
+    Count the bigram (and, if enabled, trigram) ending at this keystroke, then
+    advance the chain. This replaces the old SQL views that rebuilt n-grams
+    from consecutive per-keystroke rows: since we no longer store those rows,
+    adjacency has to be captured live.
+
+    A pair is only counted when both keys are "plain" (no modifier combo, i.e.
+    no ' + ' in the entry, mirroring the old views' NOT LIKE '%+%' filter),
+    pressed within BIGRAM_IDLE_RESET_SECONDS of each other, and falling in the
+    same time bucket. The bucket guard keeps each stored row internally
+    consistent (a bigram never spans two buckets); a combo, a long pause, or a
+    bucket flip simply breaks the chain and it reseeds on the next plain key.
+    """
+    current_is_plain = ' + ' not in log_entry
+    bigram_emitted = False
+
+    if (current_is_plain
+        and self.previous_logged_entry is not None
+        and (now_monotonic - self.previous_logged_monotonic)
+            <= BIGRAM_IDLE_RESET_SECONDS
+        and bucket == self.previous_logged_bucket):
+      self.record_bigram_count(bucket, self.previous_logged_entry, log_entry)
+      bigram_emitted = True
+      if (self.config.send_trigram_counts
+          and self.second_previous_logged_entry is not None):
+        self.record_trigram_count(
+            bucket,
+            self.second_previous_logged_entry,
+            self.previous_logged_entry,
+            log_entry
+        )
+
+    if current_is_plain:
+      # second_previous stays valid only when this step formed a real
+      # consecutive pair; otherwise a trigram next step would span a break.
+      self.second_previous_logged_entry = (
+          self.previous_logged_entry if bigram_emitted else None
+      )
+      self.previous_logged_entry = log_entry
+      self.previous_logged_monotonic = now_monotonic
+      self.previous_logged_bucket = bucket
+    else:
+      self.second_previous_logged_entry = None
+      self.previous_logged_entry = None
+      self.previous_logged_monotonic = None
+      self.previous_logged_bucket = None
+
   def full_log(self, key, event):
     if self.config.send_all_events_to_sqlite:
       row_values = (
-          datetime.utcnow().isoformat(),
+          datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
           key_to_str(canonicalize_key(
               key,
               self.config.distinguish_modifier_sides
@@ -890,7 +1187,10 @@ class KeyLoggerApp:
     logging.info('getting set up')
     logging.info(
         'effective config: '
-        f'sqlite={"on" if self.config.send_logs_to_sqlite else "off"}, '
+        f'counts={"on" if self.config.send_counts_to_sqlite else "off"}, '
+        f'bucket_minutes={self.config.bucket_interval_seconds // 60}, '
+        f'trigrams={"on" if self.config.send_trigram_counts else "off"}, '
+        f'raw_events={"on" if self.config.send_raw_events_to_sqlite else "off"}, '
         f'full_events={"on" if self.config.send_all_events_to_sqlite else "off"}, '
         f'file={"on" if self.config.send_logs_to_file else "off"}, '
         f'file_timestamps={"on" if self.config.timestamp_file_logs else "off"}, '
@@ -905,7 +1205,7 @@ class KeyLoggerApp:
         f'sqlite={self.config.sqlite_file_name}, '
         f'file={self.config.log_file_name}'
     )
-    if self.config.send_logs_to_sqlite:
+    if self.config.uses_sqlite:
       self.setup_sqlite_database()
 
     with Listener(
