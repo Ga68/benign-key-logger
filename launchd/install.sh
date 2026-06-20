@@ -48,18 +48,33 @@ fi
 REAL_PYTHON=$("$PYTHON" -c 'import os, sys; print(os.path.realpath(sys.executable))')
 
 # --- Generate the concrete plist from the template --------------------------
+# Fill the template with plutil (already used for -lint below), NOT raw sed.
+# plutil writes through the plist serializer, so values containing characters
+# that are significant to XML or to sed (& < > " | \) are stored literally and
+# escaped correctly -- raw `sed` substitution would corrupt the XML or mangle
+# the replacement on such a path. Scalars go in by key; the whole
+# ProgramArguments array is replaced in one shot via a JSON value built by the
+# resolved interpreter, so every argv element is escaped safely too. (Note:
+# `plutil -replace ProgramArguments.<N>` would INSERT at N, not overwrite it.)
 mkdir -p "$HOME/Library/LaunchAgents" "$LOG_DIR"
-
-sed \
-  -e "s|__LABEL__|$LABEL|g" \
-  -e "s|__PYTHON__|$PYTHON|g" \
-  -e "s|__SCRIPT__|$REPO_DIR/key_logger.py|g" \
-  -e "s|__WORKDIR__|$REPO_DIR|g" \
-  -e "s|__DB__|$DB|g" \
-  -e "s|__STDOUT_LOG__|$LOG_DIR/launchd.out.log|g" \
-  -e "s|__STDERR_LOG__|$LOG_DIR/launchd.err.log|g" \
-  "$TEMPLATE" > "$PLIST_DEST"
+cp "$TEMPLATE" "$PLIST_DEST"
 chmod 0644 "$PLIST_DEST"
+
+plutil -replace Label             -string "$LABEL"                    "$PLIST_DEST"
+plutil -replace WorkingDirectory  -string "$REPO_DIR"                 "$PLIST_DEST"
+plutil -replace StandardOutPath   -string "$LOG_DIR/launchd.out.log"  "$PLIST_DEST"
+plutil -replace StandardErrorPath -string "$LOG_DIR/launchd.err.log"  "$PLIST_DEST"
+
+PA_JSON=$("$PYTHON" -c 'import json, sys; print(json.dumps([sys.argv[1], sys.argv[2], "--sqlite-file", sys.argv[3]]))' \
+  "$PYTHON" "$REPO_DIR/key_logger.py" "$DB")
+plutil -replace ProgramArguments -json "$PA_JSON" "$PLIST_DEST"
+
+# A mistyped keypath would leave a placeholder behind that `plutil -lint` still
+# accepts (it's valid XML), shipping a broken agent silently. Fail loud instead.
+if grep -q '__[A-Z_]*__' "$PLIST_DEST"; then
+  echo "error: unsubstituted placeholder remains in $PLIST_DEST" >&2
+  exit 1
+fi
 
 # --- Validate ---------------------------------------------------------------
 plutil -lint "$PLIST_DEST"
